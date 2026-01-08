@@ -5,4 +5,4 @@ const int mqtt_server_port = 1883;
 
 // MQTT topics
 // const char* publishTopic = "mtww";
-const char* subscribeTopic = "/dummy";
+char* subscribeTopic = "/dummy";

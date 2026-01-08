@@ -33,7 +33,7 @@
 #endif
 
 // enable or disable pubsub features
-// #define PUBSUB
+#define PUBSUB
 
 // simple timer
 SimpleTimer timer;
@@ -254,6 +254,16 @@ void send_request() {
   sprintln(dc.pv_power);
   #ifdef PUBSUB
     publish("/powmr/dc.pv_power", dc.pv_power);
+  #endif
+
+  // calculated
+  dc.pv_current = dc.pv_power / dc.pv_voltage;
+  // reset pv voltage to zero if 1 for the logs, only after current calc
+  if (dc.pv_voltage == 1) {dc.pv_voltage = 0;}
+  sprint("dc.pv_current: ");
+  sprintln(dc.pv_current);
+  #ifdef PUBSUB
+    publish("/powmr/dc.pv_current", dc.pv_current);
   #endif
 
   dc.voltage = htons(mbus_data[5]) / 10.0;  // 4506
@@ -562,7 +572,7 @@ void psclient_reconnect() {
   if (!psclient.connected()) {
     sprint("Attempting MQTT connection...");
     // Create a random client ID
-    String clientId = "ESP32";
+    String clientId = "ESP32_";
     clientId += String(random(0xffff), HEX);
     // Attempt to connect
     if (psclient.connect(clientId.c_str())) {
@@ -579,6 +589,19 @@ void psclient_reconnect() {
       //timerId = timer.setTimeout(5000,reconnect);
     }
   }
+}
+
+// PubSub dummy...
+void pubsub_dummy() {
+  static uint8_t i = 0;
+
+  // increment every time
+  i++;
+  
+  publish(subscribeTopic, i);
+
+  // fold back
+  if (i == 255) {i = 0;}
 }
 #endif
 
@@ -611,6 +634,10 @@ void setup() {
     // mosquitto pubsub setup
     psclient.setServer(mqtt_server, mqtt_server_port);
     psclient.setCallback(psclient_callback);
+
+    // timer functions related to pubsub
+    timer.setInterval(60000, pubsub_dummy);
+    timer.setInterval(5000, psclient_reconnect);
   #endif
 
   // webserver start
@@ -668,10 +695,9 @@ void loop() {
   #ifdef PUBSUB
     // pubsub thinfs
     psclient.loop();
-    if ( !psclient.connected() ) {
-        psclient_reconnect();
-    }
   #endif
 
+  // delay
+  delay(1);
 }
 
