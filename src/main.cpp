@@ -14,8 +14,11 @@
 #include <SoftwareSerial.h>
 #include <ModbusMaster.h>
 #include <SimpleTimer.h>          // Simple Task Time Manager
+#include <PubSubClient.h>
 
+// local config on files
 #include "wifi.h"
+#include "mqtt.h"
 
 #define WEBSERIAL 1
 #define VERSION             1.04
@@ -28,6 +31,9 @@
   #define sprint(x) Serial.print(x)
   #define sprintln(x) Serial.println(x)
 #endif
+
+// enable or disable pubsub features
+// #define PUBSUB
 
 // simple timer
 SimpleTimer timer;
@@ -43,6 +49,16 @@ uint16_t mbus_data[MBUS_REGISTERS + 1]; // allow for room
 // webserver related
 AsyncWebServer server(80);
 IPAddress myIP;
+
+#ifdef PUBSUB
+  // MQTT data
+  WiFiClient espClient;
+  PubSubClient psclient(espClient);
+  unsigned long lastMsg = 0;
+  #define MSG_BUFFER_SIZE	(10)
+  char msg[MSG_BUFFER_SIZE];
+  int value = 0;
+#endif
 
 // SPIFFS
 #define FORMAT_SPIFFS_IF_FAILED true
@@ -135,6 +151,14 @@ struct InverterData {
 
 InverterData inverter;
 
+#ifdef PUBSUB
+void publish(char* topic, float payload) {
+  // publish the payload to the specified topic, convert to string all values before publishing
+  String payload_str = String(payload);
+  psclient.publish(topic, payload_str.c_str());
+}
+#endif
+
 // Read registers in chunks with retry logic
 uint8_t read_registers_chunked(uint16_t start_addr, uint16_t total_regs, uint16_t *data) {
   uint16_t chunks = (total_regs + CHUNK_SIZE - 1) / CHUNK_SIZE;
@@ -197,74 +221,125 @@ void send_request() {
   }
   
   // Process data (indexes relative to 4501)
-  inverter.op_mode = htons(mbus_data[0]);  // 4501
+  inverter.op_mode = (float)htons(mbus_data[0]);  // 4501
   sprint("inverter.op_mode: ");
   sprintln(inverter.op_mode);
-  
+  #ifdef PUBSUB
+    publish("/powmr/inverter.op_mode", inverter.op_mode);
+  #endif
+
   ac.input_voltage = htons(mbus_data[1]) / 10.0;  // 4502
   sprint("ac.input_voltage: ");
   sprintln(ac.input_voltage);
-  
+  #ifdef PUBSUB
+    publish("/powmr/ac.input_voltage", ac.input_voltage);
+  #endif
+
   ac.input_freq = htons(mbus_data[2]) / 10.0;  // 4503
   sprint("ac.input_freq: ");
   sprintln(ac.input_freq);
-  
+  #ifdef PUBSUB
+    publish("/powmr/ac.input_freq", ac.input_freq);
+  #endif
+
   dc.pv_voltage = htons(mbus_data[3]) / 10.0;  // 4504
   sprint("dc.pv_voltage: ");
   sprintln(dc.pv_voltage);
-  
+  #ifdef PUBSUB
+    publish("/powmr/dc.pv_voltage", dc.pv_voltage);
+  #endif
+
   dc.pv_power = (float)htons(mbus_data[4]);  // 4505
   sprint("dc.pv_power: ");
   sprintln(dc.pv_power);
-  
+  #ifdef PUBSUB
+    publish("/powmr/dc.pv_power", dc.pv_power);
+  #endif
+
   dc.voltage = htons(mbus_data[5]) / 10.0;  // 4506
   sprint("dc.voltage: ");
   sprintln(dc.voltage);
-  
-  dc.charge_current = htons(mbus_data[7]);  // 4508
+  #ifdef PUBSUB
+    publish("/powmr/dc.voltage", dc.voltage);
+  #endif
+
+  dc.charge_current = (float)htons(mbus_data[7]);  // 4508
   sprint("dc.charge_current: ");
   sprintln(dc.charge_current);
-  
-  dc.discharge_current = htons(mbus_data[8]);  // 4509
+  #ifdef PUBSUB
+    publish("/powmr/dc.charge_current", dc.charge_current);
+  #endif
+
+  dc.discharge_current = (float)htons(mbus_data[8]);  // 4509
   sprint("dc.discharge_current: ");
   sprintln(dc.discharge_current);
-  
+  #ifdef PUBSUB
+    publish("/powmr/dc.discharge_current", dc.discharge_current);
+  #endif
+
   ac.output_voltage = htons(mbus_data[9]) / 10.0;  // 4510
   sprint("ac.output_voltage: ");
   sprintln(ac.output_voltage);
-  
+  #ifdef PUBSUB
+    publish("/powmr/ac.output_voltage", ac.output_voltage);
+  #endif
+
   ac.output_freq = htons(mbus_data[10]) / 10.0;  // 4511
   sprint("ac.output_freq: ");
   sprintln(ac.output_freq);
-  
-  ac.output_va = htons(mbus_data[11]);  // 4512
+  #ifdef PUBSUB
+    publish("/powmr/ac.output_freq", ac.output_freq);
+  #endif
+
+  ac.output_va = (float)htons(mbus_data[11]);  // 4512
   sprint("ac.output_va: ");
   sprintln(ac.output_va);
-  
-  ac.output_watts = htons(mbus_data[12]);  // 4513
+  #ifdef PUBSUB
+    publish("/powmr/ac.output_va", ac.output_va);
+  #endif
+
+  ac.output_watts = (float)htons(mbus_data[12]);  // 4513
   sprint("ac.output_watts: ");
   sprintln(ac.output_watts);
-  
-  ac.output_load_percent = htons(mbus_data[13]);  // 4514
+  #ifdef PUBSUB
+    publish("/powmr/ac.output_watts", ac.output_watts);
+  #endif
+
+  ac.output_load_percent = (float)htons(mbus_data[13]);  // 4514
   sprint("ac.output_load_percent: ");
   sprintln(ac.output_load_percent);
+  #ifdef PUBSUB
+    publish("/powmr/ac.output_load_percent", ac.output_load_percent);
+  #endif
 
-  inverter.charger_source_priority = htons(mbus_data[35]);  // 4536
+  inverter.charger_source_priority = (float)htons(mbus_data[35]);  // 4536
   sprint("inverter.charger_source_priority: ");
   sprintln(inverter.charger_source_priority);
+  #ifdef PUBSUB
+    publish("/powmr/inverter.charger_source_priority", inverter.charger_source_priority);
+  #endif
 
-  inverter.output_source_priority = htons(mbus_data[36]);  // 4537
+  inverter.output_source_priority = (float)htons(mbus_data[36]);  // 4537
   sprint("inverter.output_source_priority: ");
   sprintln(inverter.output_source_priority);
-  
-  inverter.charger = htons(mbus_data[54]);  // 4555
+  #ifdef PUBSUB
+    publish("/powmr/inverter.output_source_priority", inverter.output_source_priority);
+  #endif
+
+  inverter.charger = (float)htons(mbus_data[54]);  // 4555
   sprint("inverter.charger: ");
   sprintln(inverter.charger);
+  #ifdef PUBSUB
+    publish("/powmr/inverter.charger", inverter.charger);
+  #endif
 
-  inverter.temp = htons(mbus_data[56]);  // 4557
+  inverter.temp = (float)htons(mbus_data[56]);  // 4557
   sprint("inverter.temp: ");
   sprintln(inverter.temp);
-  
+  #ifdef PUBSUB
+    publish("/powmr/inverter.temp", inverter.temp);
+  #endif
+
   // Battery voltage compensation calculation
   float charge_current_change = -(dc.discharge_current - dc.discharge_current_) 
                                   + (dc.charge_current - dc.charge_current_);
@@ -284,58 +359,6 @@ void send_request() {
   // All reads successful
   i_state_available = 1;
   sprintln("All data successfully read");
-}
-// runs when we are waiting for modbus data
-void idle() {
-    ArduinoOTA.handle();
-
-    yield();
-}
-
-uint8_t allowed_charger_currents[] = {0, 2, 10, 20, 30, 40, 50, 60};
-
-// set utility charge current
-// 0 - switch to solar only
-// 2, 10, 20, 30, 40, 50, 60
-void set_util_charge_current(uint8_t cc) {
-  uint8_t res;
-  uint8_t try_cnt = 0;
-  char buf[60];
-
-    if (cc == 0) {
-      charger_active = 0;
-      while ( // solar only
-              (res = node.writeSingleRegister(5017, 3)) != 0 
-              && try_cnt++ < 5
-      );
-      if (res != 0) { charger_active = 1; }
-      snprintf(buf, 50,  "Charger disconnected, solar only, res = %u", res);
-      // client.publish(publishTopicLog, buf);
-      sprintln(buf);
-    } else {
-      // set utility charge current
-      while ( 
-              (res = node.writeSingleRegister(5024, cc)) != 0 
-              && try_cnt++ < 5 
-      );
-      snprintf(buf, 50,  "Charger current set to %u A, res = %u", cc, res);
-      // client.publish(publishTopicLog, buf);
-      sprintln(buf);
-
-      if (!charger_active) {
-        charger_active = 1;
-        try_cnt = 0;
-        // set util and solar charge mode
-        while (
-                (res = node.writeSingleRegister(5017, 2)) != 0
-                && try_cnt++ < 5
-        );
-        if (res != 0) { charger_active = 0; }
-        snprintf(buf, 50,  "Charger enabled, res = %u", res);
-        // client.publish(publishTopicLog, buf);
-        sprintln(buf);
-      } 
-    }
 }
 
 // runs periodically to monitor and control battery voltage 
@@ -523,6 +546,48 @@ void wifi_scan() {
   }
 }
 
+#ifdef PUBSUB
+  void psclient_callback(char* topic, byte* payload, unsigned int length) {
+    sprint("MQTT Message arrived [");
+    sprint(topic);
+    sprint("] ");
+    for (int i = 0; i < length; i++) {
+      sprint((char)payload[i]);
+    }
+    sprintln();
+  }
+
+void psclient_reconnect() {
+  // Loop until we're reconnected
+  if (!psclient.connected()) {
+    sprint("Attempting MQTT connection...");
+    // Create a random client ID
+    String clientId = "ESP32";
+    clientId += String(random(0xffff), HEX);
+    // Attempt to connect
+    if (psclient.connect(clientId.c_str())) {
+      sprintln("connected");
+      psclient.subscribe(subscribeTopic);
+    } else {
+      sprint("failed, rc=");
+      sprint(psclient.state());
+      sprintln(" ");
+
+      // should we retry ???
+      // Wait 5 seconds before retrying
+      //delay(5000);
+      //timerId = timer.setTimeout(5000,reconnect);
+    }
+  }
+}
+#endif
+
+void idle() {
+    // do nothing
+    timer.run();
+    yield();
+}
+
 void node_setup() {
   // communicate with Modbus slave ID 5 over Serial
   node.begin(5, SSerial);
@@ -532,7 +597,7 @@ void node_setup() {
 
   // timer.setInterval(5000, alivePrint);
   timer.setInterval(READ_INTERVAL, send_request);
-  timer.setInterval(READ_INTERVAL *2, controller);
+  timer.setInterval(READ_INTERVAL*2, controller);
 }
 
 void setup() {
@@ -541,6 +606,12 @@ void setup() {
 
   // Wifi connect, client and start server if not client
   do_wifi();
+
+  #ifdef PUBSUB
+    // mosquitto pubsub setup
+    psclient.setServer(mqtt_server, mqtt_server_port);
+    psclient.setCallback(psclient_callback);
+  #endif
 
   // webserver start
   webserver_setup();
@@ -594,4 +665,13 @@ void loop() {
   // timer
   timer.run();
 
+  #ifdef PUBSUB
+    // pubsub thinfs
+    psclient.loop();
+    if ( !psclient.connected() ) {
+        psclient_reconnect();
+    }
+  #endif
+
 }
+
