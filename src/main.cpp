@@ -29,13 +29,16 @@
   #define sprintln(x) Serial.println(x)
 #endif
 
-#define DEBUG(x)  sprintln(x);
-
 // simple timer
 SimpleTimer timer;
 
 // modbus data
 ModbusMaster node;
+#define MBUS_REGISTERS 61 // Words uint16, starting from 4501 to 4562
+#define CHUNK_SIZE 3
+#define RETRY_COUNT 2
+#define CHUNK_DELAY_US 100
+uint16_t mbus_data[MBUS_REGISTERS + 1]; // allow for room
 
 // webserver related
 AsyncWebServer server(80);
@@ -54,14 +57,6 @@ bool wifi_mode = 0; // 0 = client | 1 = AP
 // define SoftWare Serial
 EspSoftwareSerial::UART SSerial;
 
-//flag for saving data
-bool shouldSaveConfig = false;
-
-// MQTT
-char conf_server_ip[32] = "mqtt.local";
-char conf_server_port[6] = "1883";
-uint16_t conf_server_port_int;
-
 // global invertor state
 
 uint8_t i_state_available = 0;
@@ -75,423 +70,221 @@ uint8_t charger_active = 0;
 #define BATT_MAX_VOLTAGE 28.8
 #define BATT_MIN_VOLTAGE 23.0
 
-uint16_t op_mode;
-float ac_voltage;
-float ac_freq;
-float pv_voltage;
-float pv_power;
-float batt_voltage;
-float batt_voltage_;
-float batt_charge_current;
-float batt_charge_current_;
-float batt_discharge_current;
-float batt_discharge_current_;
-float output_va;
-float output_watts;
-float output_voltage;
-float output_freq;
-float load_percent;
+// ac data
+struct ACData {
+  float input_voltage;
+  float input_freq;
+  float output_voltage;
+  float output_freq;
+  float output_current;
+  float output_va;
+  float output_watts;
+  float output_load_percent;
+};
 
-float batt_soc = 0;
-float inverter_temp = 0;
+ACData ac;
 
-// battery upper float voltage setpoint
-float batt_voltage_charged = 27.2;
-uint8_t batt_max_charge_current = 60;
-uint8_t charge_current = 0;
+// dc data
+struct DCData {
+  float pv_voltage;
+  float pv_power;
+  float pv_current;
+  float voltage;
+  float voltage_;
+  float charge_current;
+  float charge_current_;
+  float discharge_current;
+  float discharge_current_;
+  float soc = 0;
+  float charged_voltage = 28.8;
+};
 
-#define TIME_OUT  15
-// 512
-#define MAX_MBUS_PKT  500
+DCData dc;
 
-void set_util_charge_current(uint8_t); 
+// inverter data
+struct InverterData {
+  float temp = 0;
+  /* Operational mode
+    0:
+    1:
+    2:
+    3: On Battery
+    4: On AC
+    5:
+  */
+  uint16_t op_mode;
+  /* Charger status
+    0: Off
+    1: Idle
+    2: Active
+  */
+  uint16_t charger;
+  /* FAKE Output source priority
+    0: Battery
+    1: AC
+    2: Solar
+  */
+  uint16_t output_source_priority;
+  /* FAKE charger source priority
+    0: Battery
+    1: Solar
+    2: AC 
+  */
+  uint16_t charger_source_priority;
+};
 
-/**
- * @fn int strend(const char *s, const char *t)
- * @brief Searches the end of string s for string t
- * @param s the string to be searched
- * @param t the substring to locate at the end of string s
- * @return one if the string t occurs at the end of the string s, and zero otherwise
- */
-int strend(const char *s, const char *t) {
-    size_t ls = strlen(s); // find length of s
-    size_t lt = strlen(t); // find length of t
-    if (ls >= lt)  // check if t can fit in s
-    {
-        // point s to where t should start and compare the strings from there
-        return (0 == memcmp(t, s + (ls - lt), lt));
-    }
-    return 0; // t was longer than s
-}
+InverterData inverter;
 
-void alivePrint() {
-  Serial.print(".");
-}
-
-void hexDump(const uint8_t*b, int len){
-  //#ifdef DEBUG_PRINTS
-  Serial.println();
-  for (int i=0; i < len; i = i + 16) {
-    Serial.print("           ");
-    for(int x=0; x<16 && (x+i) < len; x++) {
-      if(b[i+x]<=0xf) Serial.print("0");
-      Serial.print(b[i+x],HEX);
-      Serial.print(" ");
-    }
-    Serial.print(" ");
-    for(int x=0; x<16 && (x+i) < len; x++) {
-      if (b[i+x]<=32||b[i+x] >= 126) {
-          Serial.print(".");
-      } else Serial.print((char)b[i+x]);
-    }
-    Serial.print("\n");
-  }
-  Serial.print("                   Length: ");
-  Serial.println(len);
-//  #endif
-}
-
-void falltosleep() {
-  DEBUG("Sleep...\n");
-  ESP.deepSleep(60e6); // 60 sec
-  // RF_NO_CAL
-  // ESP.deepSleepInstant(microseconds, mode); // mode WAKE_RF_DEFAULT, WAKE_RFCAL, WAKE_NO_RFCAL, WAKE_RF_DISABLED
-}
-
-// // mqtt subscribe callback / command topic
-// void callback(char* topic, byte* payload, unsigned int length) {
-//   Serial.print("\nMessage arrived [");
-//   Serial.print(topic);
-//   Serial.print("] ");
-//   for (int i = 0; i < length; i++) {
-//     Serial.print((char)payload[i]);
-//   }
-//   Serial.println();
-
-//   if (strend(topic,"/txpow")) {
-//       Serial.println("TX power set");
-//       payload[length] = '\0'; // might be unsafe
-//       float txpow = atof((char *)payload);
-//       WiFi.setOutputPower(txpow);        // float 0 - 20.5 ->>> 4.0 * val (0-82)
-//   }
-
-//   if (strend(topic,"/reboot")) {
-//     Serial.println("Topic Reboot...");
-//     Serial.flush();
-//     delay(1000);
-//     ESP.reset();
-//     delay(5000);
-//   }
-
-//   #define TOKEN_SEP   " "
-
-//   // set util charge current to 2 a
-//   //  '/iot/node/powmr/c/modbus_write_single' -m "5024 2"
-//   //  
-//   // set solar only charger: 
-//   // func 6, (5017), 0003
-//   // /iot/node/powmr/s/rec 0506139900031ce4
-//   //
-//   // set util and solar charger:
-//   // func 6, (5017), 0002
-
-//   if (strend(topic,"/modbus_write_single")) {
-//     uint16_t reg_n; 
-//     uint16_t reg_val;
-//     char* ptr;
-//     ptr = (char *)payload;
-//     static char* seq_tok_last; // last char in tokenizer
-
-//     *(payload + length) = '\0';
-//     ptr = strtok_r(ptr, TOKEN_SEP, &seq_tok_last);
-
-//     if (ptr != NULL) {
-//       reg_n = atoi(ptr);
-//       ptr = strtok_r(NULL, TOKEN_SEP, &seq_tok_last);
-//       if (ptr != NULL) {
-//         reg_val = atoi(ptr);
-//         uint8_t res = node.writeSingleRegister(reg_n, reg_val);
-//         char buf[10];
-//         snprintf(buf, 9,  "%u", res);
-//         client.publish(publishTopicLog, buf);
-//       }
-//     } 
-//   }
-
-
-//   if (strend(topic,"/modbus_read_single")) {
-//     *(payload + length) = '\0';
-//     uint16_t reg_n = atoi((char *)payload);
-
-//     uint8_t res = node.readHoldingRegisters(reg_n, 1);
-//     uint16_t response;
-//     if (res == node.ku8MBSuccess) {
-//       response = node.getResponseBuffer(0);
-//       char buf[10];
-//       char topic_buf[50];
-//       snprintf(buf, 9, "%u", response);
-//       snprintf(topic_buf, 49, "%s/%u", publishTopic, reg_n);
-//       client.publish(topic_buf, buf);
-//     } else {
-//       client.publish(publishTopicLog, "error reading from holding register");
-//     }
-//   }
-
-//   if (strend(topic,"/set_charge_current")) {
-//     *(payload + length) = '\0';
-//     uint16_t cc = atoi((char *)payload);
-//     set_util_charge_current(cc);
-//   }
-
-//   if (strend(topic,"/set_charge_current_limit")) {
-//     *(payload + length) = '\0';
-//     batt_max_charge_current = atoi((char *)payload);
-//   }
-
-//   if (strend(topic,"/set_batt_voltage_charged")) {
-//     *(payload + length) = '\0';
-//     batt_voltage_charged = atof((char *)payload);
-//   }
-// }
-
-// void reconnect() {
-//   // Loop until we're reconnected
-//   if (!client.connected()) {
-//     Serial.print("Attempting MQTT connection...");
-//     // Create a random client ID
-//     String clientId = "ESP8266Client-";
-//     clientId += String(random(0xffff), HEX);
-//     // Attempt to connect
-//     if (client.connect(clientId.c_str())) {
-//       Serial.println("connected");
-//       client.subscribe(mqtt_topic_cmd);
-//     } else {
-//       Serial.print("failed, rc=");
-//       Serial.print(client.state());
-//       Serial.println(" ");
-//       // should we retry ???
-//       // Wait 5 seconds before retrying
-//       //delay(5000);
-//       //timerId = timer.setTimeout(5000,reconnect);
-//     }
-//   }
-// }
-
-int getRSSI() {
-  // print the received signal strength:
-  int rssi = WiFi.RSSI();
-  Serial.print("signal strength (RSSI): ");
-  Serial.print(rssi);
-  Serial.println(" dBm");
-  return(rssi);
-}
-
-// void publish_float(const char *topic, float var) {
-//     char buf[11];
-//     snprintf(buf, 10,"%3.1f", var);
-//     client.publish(topic, buf);
-// }
-
-// void publish_float4(const char *topic, float var) {
-//     char buf[11];
-//     snprintf(buf, 10,"%3.4f", var);
-//     client.publish(topic, buf);
-// }
-
-
-// requests data from Slave device
-void send_request() {
-  // see register listing here: https://github.com/odya/esphome-powmr-hybrid-inverter/blob/main/docs/registers-map.md
+// Read registers in chunks with retry logic
+uint8_t read_registers_chunked(uint16_t start_addr, uint16_t total_regs, uint16_t *data) {
+  uint16_t chunks = (total_regs + CHUNK_SIZE - 1) / CHUNK_SIZE;
+  uint16_t current_addr = start_addr;
+  uint16_t regs_read = 0;
   
-  uint8_t j, result;
-  #define MAX_MBUS_WORDS  50
-  uint16_t data[MAX_MBUS_WORDS];
-
-  #define MAX_MBUS_PKT_S (MAX_MBUS_WORDS*2)
-
-  static uint8_t charArr[2*MAX_MBUS_PKT_S + 1]; //Note there needs to be 1 extra space for this to work as snprintf null terminates.
-  uint8_t *myPtr;
-  myPtr = charArr; 
-
-      // variables
-  // read 45 registers (func 3) from slave 5 starting from address 4501 (Decimal) 
-  // 05031195002d9143
-      // state
-  // read 16 registers (func 3) from slave 5 starting from address 4546 (Decimal) 11C2
-  // 050311c20010e142
-
-  uint16_t nregisters = 45;
-
-  sprintln("Sending request... register 4501");
-  result = node.readHoldingRegisters(4501, nregisters);
-
-  // do something with data if read is successful
-  if (result == node.ku8MBSuccess)
-  {
-    for (j = 0; j < 45; j++)
-    {
-      data[j] = node.getResponseBuffer(j);
+  for (uint16_t chunk = 0; chunk < chunks; chunk++) {
+    uint16_t regs_to_read = min(CHUNK_SIZE, total_regs - regs_read);
+    uint8_t attempts = 0;
+    uint8_t success = 0;
+    
+    // Try reading this chunk (with retry)
+    while (attempts <= RETRY_COUNT && !success) {
+      uint8_t result = node.readHoldingRegisters(current_addr, regs_to_read);
+      
+      if (result == node.ku8MBSuccess) {
+        // Copy chunk data to buffer
+        for (uint16_t j = 0; j < regs_to_read; j++) {
+          data[regs_read + j] = node.getResponseBuffer(j);
+        }
+        success = 1;
+        
+      } else {
+        attempts++;
+        // delay between retries
+        if (attempts < RETRY_COUNT) {
+          delayMicroseconds(CHUNK_DELAY_US);
+        }
+      }
     }
-
-    // dump data to mqtt topic
-    // myPtr = charArr; 
-    // for (uint16_t i = 0; i < nregisters; i++){
-    //   snprintf((char *)myPtr, 5,"%04x", data[i]); 
-    //   myPtr += 4; 
-    // }
-
-    // client.publish(publishTopic_raw1, charArr, nregisters*2*2);
-
-    // convert and publish variables
-
-    /* op_mode
-      0: 
-      1: 
-      2: 
-      3: Battery Only
-      4: AC
-    */
-
-    op_mode = htons(data[0]); // 4501
-    myPtr = charArr; 
-    snprintf((char *)myPtr, 5, "%04x", op_mode);
-    // client.publish("/iot/node/powmr/s/mode", charArr, strlen((char *)charArr));
-    sprint("op_mode: ");
-    sprintln(op_mode);
-
-    ac_voltage = htons(data[1]) / 10.0; // 4502
-    // publish_float("/iot/node/powmr/s/ac_voltage", ac_voltage);
-    sprint("ac_voltage: ");
-    sprintln(ac_voltage);
-
-    ac_freq = htons(data[2]) / 10.0; // 4503
-    // publish_float("/iot/node/powmr/s/ac_freq", ac_freq);
-    sprint("ac_freq: ");
-    sprintln(ac_freq);
-
-    pv_voltage = htons(data[3]) / 10.0; // 4504
-    // publish_float("/iot/node/powmr/s/pv_voltage", pv_voltage);
-    sprint("pv_voltage: ");
-    sprintln(pv_voltage);
-
-    pv_power = (float) htons(data[4]);  // 4505
-    // publish_float("/iot/node/powmr/s/pv_power", pv_power);
-    sprint("pv_power: ");
-    sprintln(pv_power);
-
-    batt_voltage = htons(data[5]) / 10.0; // 4506
-    // publish_float("/iot/node/powmr/s/batt_voltage", batt_voltage);
-    sprint("batt_voltage: ");
-    sprintln(batt_voltage);
-
-    // 4507: SoC pero muy innexacto si no habla con el battery pack
-
-    batt_charge_current = htons(data[7]); // 4508
-    // publish_float("/iot/node/powmr/s/batt_charge_current", batt_charge_current);
-    sprint("batt_charge_current: ");
-    sprintln(batt_charge_current);
-
-    batt_discharge_current = htons(data[8]); // 4509
-    // publish_float("/iot/node/powmr/s/batt_discharge_current", batt_discharge_current);
-    sprint("batt_discharge_current: ");
-    sprintln(batt_discharge_current);
-
-    output_voltage = htons(data[9]) / 10.0; // 4510
-    // publish_float("/iot/node/powmr/s/output_voltage", output_voltage);
-    sprint("output_voltage: ");
-    sprintln(output_voltage);
-
-    output_freq = htons(data[10]) / 10.0; // 4511
-    // publish_float("/iot/node/powmr/s/output_freq", output_freq);
-    sprint("output_freq: ");
-    sprintln(output_freq);
-
-    output_va = htons(data[11]); // 4512
-    // publish_float("/iot/node/powmr/s/output_va", output_va);
-    sprint("output_va: ");
-    sprintln(output_va);
-
-    output_watts = htons(data[12]); // [/ 20.0]?; // 4513
-    // publish_float("/iot/node/powmr/s/output_watts", output_watts);
-    sprint("output_watts: ");
-    sprintln(output_watts);
-
-    load_percent = htons(data[13]); // [/ 20.0]?; // 4514
-    // publish_float("/iot/node/powmr/s/load_percent", load_percent);
-    sprint("load_percent: ");
-    sprintln(load_percent);
-
-    // update wires resistanse coeff
-    float new_k;
-    //uint8_t update_k = 0;
-    /*
-    if (i_state_available && batt_discharge_current_ - batt_discharge_current > 10) {
-      new_k = abs(batt_voltage_ - batt_voltage) / abs(batt_discharge_current_ - batt_discharge_current);
-      update_k = 1;
+    
+    if (!success) {
+      sprint("Failed to read chunk at addr ");
+      sprint(current_addr);
+      sprint(" after ");
+      sprint(attempts);
+      sprintln(" attempts");
+      return 0;  // Failure
     }
-    if (i_state_available && batt_charge_current - batt_charge_current_ > 10) {
-      new_k = abs(batt_voltage - batt_voltage_) / abs(batt_charge_current - batt_discharge_current_);
-      update_k = 1;
+    
+    regs_read += regs_to_read;
+    current_addr += regs_to_read;
+    
+    // Delay between chunks (except after last chunk)
+    if (chunk < chunks - 1) {
+      delayMicroseconds(CHUNK_DELAY_US);
     }
-    */
-    float charge_current_change = -(batt_discharge_current - batt_discharge_current_) 
-                                    + (batt_charge_current - batt_charge_current_);
-    if (i_state_available 
-          &&  abs(charge_current_change) > 5.0) {
-        new_k = (batt_voltage - batt_voltage_) / charge_current_change;
-
-        batt_v_compensation_k = batt_v_compensation_k + (new_k - batt_v_compensation_k) * 0.1;
-
-        myPtr = charArr; 
-        snprintf((char *)myPtr, 100,"New voltage coeff: %3.5f, updated batt_v_compensation_k %3.5f", new_k, batt_v_compensation_k); 
-        // client.publish(publishTopicLog, (char *) charArr);
-        // sprintln(myPtr);
-    }
-
-    batt_voltage_ = batt_voltage;
-    batt_charge_current_ = batt_charge_current;
-    batt_discharge_current_ = batt_discharge_current;
-
-    i_state_available = 1;
   }
-  else
-  {
-    sprintln("node read error registers 4501");
-    i_state_available = 0;
-  }
-
-  nregisters = 16;
-  sprintln("Sending request... register 4546");
-  result = node.readHoldingRegisters(4546, nregisters);
-
-  if (result == node.ku8MBSuccess)
-  {
-    for (j = 0; j < 45; j++)
-    {
-      data[j] = node.getResponseBuffer(j);
-    }
-    // // dump data to mqtt topic
-
-    // myPtr = charArr; 
-
-    // for (uint16_t i = 0; i < nregisters; i++){
-    //   snprintf((char *)myPtr, 5,"%04x", data[i]); 
-    //   myPtr += 4;
-    // }
-
-    // client.publish(publishTopic_raw2, charArr, nregisters*2*2);
-
-    inverter_temp = htons(data[11]);
-    // publish_float("/iot/node/powmr/s/inverter_temp", inverter_temp);
-    sprint("inverter_temp: ");
-    sprintln(inverter_temp);
-  }
-  else
-  {
-    sprintln("node read error registers 4546");
-  }
+  
+  return 1;  // Success
 }
 
+void send_request() {
+  // Read all registers 4501-4561 (61 registers total)
+  sprintln("Reading registers 4501-4561 (61 regs)");
+  if (!read_registers_chunked(4501, MBUS_REGISTERS, mbus_data)) {
+    sprintln("Error reading registers");
+    i_state_available = 0;
+    return;
+  }
+  
+  // Process data (indexes relative to 4501)
+  inverter.op_mode = htons(mbus_data[0]);  // 4501
+  sprint("inverter.op_mode: ");
+  sprintln(inverter.op_mode);
+  
+  ac.input_voltage = htons(mbus_data[1]) / 10.0;  // 4502
+  sprint("ac.input_voltage: ");
+  sprintln(ac.input_voltage);
+  
+  ac.input_freq = htons(mbus_data[2]) / 10.0;  // 4503
+  sprint("ac.input_freq: ");
+  sprintln(ac.input_freq);
+  
+  dc.pv_voltage = htons(mbus_data[3]) / 10.0;  // 4504
+  sprint("dc.pv_voltage: ");
+  sprintln(dc.pv_voltage);
+  
+  dc.pv_power = (float)htons(mbus_data[4]);  // 4505
+  sprint("dc.pv_power: ");
+  sprintln(dc.pv_power);
+  
+  dc.voltage = htons(mbus_data[5]) / 10.0;  // 4506
+  sprint("dc.voltage: ");
+  sprintln(dc.voltage);
+  
+  dc.charge_current = htons(mbus_data[7]);  // 4508
+  sprint("dc.charge_current: ");
+  sprintln(dc.charge_current);
+  
+  dc.discharge_current = htons(mbus_data[8]);  // 4509
+  sprint("dc.discharge_current: ");
+  sprintln(dc.discharge_current);
+  
+  ac.output_voltage = htons(mbus_data[9]) / 10.0;  // 4510
+  sprint("ac.output_voltage: ");
+  sprintln(ac.output_voltage);
+  
+  ac.output_freq = htons(mbus_data[10]) / 10.0;  // 4511
+  sprint("ac.output_freq: ");
+  sprintln(ac.output_freq);
+  
+  ac.output_va = htons(mbus_data[11]);  // 4512
+  sprint("ac.output_va: ");
+  sprintln(ac.output_va);
+  
+  ac.output_watts = htons(mbus_data[12]);  // 4513
+  sprint("ac.output_watts: ");
+  sprintln(ac.output_watts);
+  
+  ac.output_load_percent = htons(mbus_data[13]);  // 4514
+  sprint("ac.output_load_percent: ");
+  sprintln(ac.output_load_percent);
+
+  inverter.charger_source_priority = htons(mbus_data[35]);  // 4536
+  sprint("inverter.charger_source_priority: ");
+  sprintln(inverter.charger_source_priority);
+
+  inverter.output_source_priority = htons(mbus_data[36]);  // 4537
+  sprint("inverter.output_source_priority: ");
+  sprintln(inverter.output_source_priority);
+  
+  inverter.charger = htons(mbus_data[54]);  // 4555
+  sprint("inverter.charger: ");
+  sprintln(inverter.charger);
+
+  inverter.temp = htons(mbus_data[56]);  // 4557
+  sprint("inverter.temp: ");
+  sprintln(inverter.temp);
+  
+  // Battery voltage compensation calculation
+  float charge_current_change = -(dc.discharge_current - dc.discharge_current_) 
+                                  + (dc.charge_current - dc.charge_current_);
+  if (i_state_available && abs(charge_current_change) > 5.0) {
+    float new_k = (dc.voltage - dc.voltage_) / charge_current_change;
+    batt_v_compensation_k = batt_v_compensation_k + (new_k - batt_v_compensation_k) * 0.1;
+    
+    // myPtr = charArr;
+    // snprintf((char *)myPtr, 100, "New voltage coeff: %3.5f, updated batt_v_compensation_k %3.5f", 
+    //          new_k, batt_v_compensation_k);
+  }
+  
+  dc.voltage_ = dc.voltage;
+  dc.charge_current_ = dc.charge_current;
+  dc.discharge_current_ = dc.discharge_current;
+  
+  // All reads successful
+  i_state_available = 1;
+  sprintln("All data successfully read");
+}
 // runs when we are waiting for modbus data
 void idle() {
     ArduinoOTA.handle();
@@ -548,86 +341,19 @@ void set_util_charge_current(uint8_t cc) {
 // runs periodically to monitor and control battery voltage 
 void controller() {
   if (i_state_available) {
-    batt_v_corrected = batt_voltage - (batt_v_compensation_k * batt_charge_current)
-                                    + (batt_v_compensation_k * batt_discharge_current);
-    // publish_float4("/iot/node/powmr/s/batt_voltage_corrected", batt_v_corrected);
+    batt_v_corrected = dc.voltage - (batt_v_compensation_k * dc.charge_current)
+                                    + (batt_v_compensation_k * dc.discharge_current);
+    // publish_float4("/iot/node/powmr/s/dc.voltage_corrected", batt_v_corrected);
     // publish_float4("/iot/node/powmr/s/batt_v_compensation_k", batt_v_compensation_k);
     sprint("batt_v_corrected: ");
     sprintln(batt_v_corrected);
     sprint("batt_v_compensation_k: ");
     sprintln(batt_v_compensation_k);
     
-    batt_soc = 100.0 * (batt_voltage - BATT_MIN_VOLTAGE) / (BATT_MAX_VOLTAGE - BATT_MIN_VOLTAGE);
-    // publish_float("/iot/node/powmr/s/batt_soc", batt_soc);
-    sprint("batt_soc: ");
-    sprintln(batt_soc);
-
-/*
-    uint16_t charge_current = 2;
-    if (batt_voltage_charged - batt_v_corrected > 0.4) {
-      // set max allowed charge current
-      charge_current = batt_max_charge_current;
-    } else if (batt_voltage_charged - batt_v_corrected > 0.2) {
-      charge_current = batt_max_charge_current / 2;
-      if (charge_current < 10) charge_current = 2;
-      if (charge_current == 25) charge_current = 20;
-      if (charge_current == 15) charge_current = 10;
-    } else if (batt_voltage_charged - batt_v_corrected >= 0.1) {
-      charge_current = 2;
-    } else if (batt_voltage_charged <= batt_v_corrected) {
-      charge_current = 0;
-    } 
-    set_util_charge_current(charge_current);
-
-    if (batt_voltage == batt_voltage_charged) {
-      // do nothing, keep the same charge current
-    } else {
-      // battery voltage is out of desired state
-      
-      if (batt_voltage >= batt_voltage_charged) {
-        // decrease charger current
-        if (charge_current == 2) {
-          charge_current = 0;
-        } else if (charge_current == 10) {
-          charge_current = 2;
-        } else if (charge_current > 10) {
-          charge_current = charge_current - 10;
-        }
-      } else {
-        // increase charger current
-        if (charge_current < batt_max_charge_current) {
-            if (charge_current == 0) {
-              charge_current = 2;
-            } else if (charge_current == 2) {
-              charge_current = 10;
-            } else if (charge_current < 60) {
-              charge_current = charge_current + 10;
-            }
-        }
-      }
-
-        // if (batt_voltage_charged - batt_voltage >= 0.3) {
-        //   // set max allowed charge current
-        //   charge_current = batt_max_charge_current;
-        // } else if (batt_voltage_charged - batt_voltage >= 0.2) {
-        //   if (batt_max_charge_current < 10) {
-        //     charge_current = 2;
-        //   } else {
-        //     charge_current = 20;
-        //   }
-        // } else if (batt_voltage_charged - batt_voltage >= 0.1) {
-        //   if (charge_current == 0) {
-        //     charge_current = 2;
-        //   }
-        // }
-    }
-
-    if (charge_current > batt_max_charge_current) {
-      charge_current = batt_max_charge_current;
-    }
-
-    set_util_charge_current(charge_current); 
-  */
+    dc.soc = 100.0 * (dc.voltage - BATT_MIN_VOLTAGE) / (BATT_MAX_VOLTAGE - BATT_MIN_VOLTAGE);
+    // publish_float("/iot/node/powmr/s/dc.soc", dc.soc);
+    sprint("dc.soc: ");
+    sprintln(dc.soc);
   }
 }
 
