@@ -20,7 +20,10 @@
 #include "wifi.h"
 #include "mqtt.h"
 
+/********* Configurable flags *************/
 #define WEBSERIAL 1
+#define VERBOSE_SERIAL 1
+
 #define VERSION             1.04
 
 // rewrite prints
@@ -83,8 +86,9 @@ uint8_t charger_active = 0;
 
 #define READ_INTERVAL  15000 // 15 seconds, it's millis
 
-#define BATT_MAX_VOLTAGE 28.8
-#define BATT_MIN_VOLTAGE 23.0
+// this is the linear part of the range
+#define BATT_MAX_VOLTAGE 27
+#define BATT_MIN_VOLTAGE 23
 
 // ac data
 struct ACData {
@@ -107,10 +111,13 @@ struct DCData {
   float pv_current;
   float voltage;
   float voltage_;
+  float voltage_corrected;
   float charge_current;
   float charge_current_;
   float discharge_current;
   float discharge_current_;
+  float charge_power;
+  float discharge_power;
   float soc = 0;
   float charged_voltage = 28.8;
 };
@@ -222,130 +229,196 @@ void send_request() {
   
   // Process data (indexes relative to 4501)
   inverter.op_mode = (float)htons(mbus_data[0]);  // 4501
-  sprint("inverter.op_mode: ");
-  sprintln(inverter.op_mode);
+  #ifdef VERBOSE_SERIAL
+    sprint("inverter.op_mode: ");
+    sprintln(inverter.op_mode);
+  #endif
   #ifdef PUBSUB
     publish("/powmr/inverter.op_mode", inverter.op_mode);
   #endif
 
   ac.input_voltage = htons(mbus_data[1]) / 10.0;  // 4502
-  sprint("ac.input_voltage: ");
-  sprintln(ac.input_voltage);
+  #ifdef VERBOSE_SERIAL
+    sprint("ac.input_voltage: ");
+    sprintln(ac.input_voltage);
+  #endif
   #ifdef PUBSUB
     publish("/powmr/ac.input_voltage", ac.input_voltage);
   #endif
 
   ac.input_freq = htons(mbus_data[2]) / 10.0;  // 4503
-  sprint("ac.input_freq: ");
-  sprintln(ac.input_freq);
+  #ifdef VERBOSE_SERIAL
+    sprint("ac.input_freq: ");
+    sprintln(ac.input_freq);
+  #endif
   #ifdef PUBSUB
     publish("/powmr/ac.input_freq", ac.input_freq);
   #endif
 
   dc.pv_voltage = htons(mbus_data[3]) / 10.0;  // 4504
-  sprint("dc.pv_voltage: ");
-  sprintln(dc.pv_voltage);
+  if (dc.pv_voltage < 6) { // 1/10 of the minimum voltage
+    dc.pv_voltage = 0;
+  }
+  #ifdef VERBOSE_SERIAL
+    sprint("dc.pv_voltage: ");
+    sprintln(dc.pv_voltage);
+  #endif
   #ifdef PUBSUB
     publish("/powmr/dc.pv_voltage", dc.pv_voltage);
   #endif
 
   dc.pv_power = (float)htons(mbus_data[4]);  // 4505
-  sprint("dc.pv_power: ");
-  sprintln(dc.pv_power);
+  if (dc.pv_voltage < 6) { // 1/10 of the minimum voltage
+    dc.pv_power = 0;
+  }
+  #ifdef VERBOSE_SERIAL
+    sprint("dc.pv_power: ");
+    sprintln(dc.pv_power);
+  #endif
   #ifdef PUBSUB
     publish("/powmr/dc.pv_power", dc.pv_power);
   #endif
 
   // calculated
-  dc.pv_current = dc.pv_power / dc.pv_voltage;
-  // reset pv voltage to zero if 1 for the logs, only after current calc
-  if (dc.pv_voltage == 1) {dc.pv_voltage = 0;}
-  sprint("dc.pv_current: ");
-  sprintln(dc.pv_current);
+  if (dc.pv_voltage > 0) { // 1/10 of the minimum voltage
+    // valid voltage
+    dc.pv_current = dc.pv_power / dc.pv_voltage;
+  } else {
+    dc.pv_current = 0;
+  }
+  #ifdef VERBOSE_SERIAL
+    sprint("dc.pv_current: ");
+    sprintln(dc.pv_current);
+  #endif
   #ifdef PUBSUB
     publish("/powmr/dc.pv_current", dc.pv_current);
   #endif
 
   dc.voltage = htons(mbus_data[5]) / 10.0;  // 4506
-  sprint("dc.voltage: ");
-  sprintln(dc.voltage);
+  #ifdef VERBOSE_SERIAL
+    sprint("dc.voltage: ");
+    sprintln(dc.voltage);
+  #endif
+  // will be compensated by the cable losses see at the bottom
   #ifdef PUBSUB
     publish("/powmr/dc.voltage", dc.voltage);
   #endif
 
   dc.charge_current = (float)htons(mbus_data[7]);  // 4508
-  sprint("dc.charge_current: ");
-  sprintln(dc.charge_current);
+  #ifdef VERBOSE_SERIAL
+    sprint("dc.charge_current: ");
+    sprintln(dc.charge_current);
+  #endif
   #ifdef PUBSUB
     publish("/powmr/dc.charge_current", dc.charge_current);
   #endif
 
   dc.discharge_current = (float)htons(mbus_data[8]);  // 4509
-  sprint("dc.discharge_current: ");
-  sprintln(dc.discharge_current);
+  #ifdef VERBOSE_SERIAL
+    sprint("dc.discharge_current: ");
+    sprintln(dc.discharge_current);
+  #endif
   #ifdef PUBSUB
     publish("/powmr/dc.discharge_current", dc.discharge_current);
   #endif
 
+  // calculated
+  dc.discharge_power = dc.voltage * dc.discharge_current;
+  #ifdef VERBOSE_SERIAL
+    sprint("dc.discharge_power: ");
+    sprintln(dc.discharge_power);
+  #endif
+  #ifdef PUBSUB
+    publish("/powmr/dc.discharge_power", dc.discharge_power);
+  #endif
+
+  // calculated
+  dc.charge_power = dc.voltage * dc.charge_current;
+  #ifdef VERBOSE_SERIAL
+    sprint("dc.charge_power: ");
+    sprintln(dc.charge_power);
+  #endif
+  #ifdef PUBSUB
+    publish("/powmr/dc.charge_power", dc.charge_power);
+  #endif
+  
   ac.output_voltage = htons(mbus_data[9]) / 10.0;  // 4510
-  sprint("ac.output_voltage: ");
-  sprintln(ac.output_voltage);
+  #ifdef VERBOSE_SERIAL
+    sprint("ac.output_voltage: ");
+    sprintln(ac.output_voltage);
+  #endif
   #ifdef PUBSUB
     publish("/powmr/ac.output_voltage", ac.output_voltage);
   #endif
 
   ac.output_freq = htons(mbus_data[10]) / 10.0;  // 4511
-  sprint("ac.output_freq: ");
-  sprintln(ac.output_freq);
+  #ifdef VERBOSE_SERIAL
+    sprint("ac.output_freq: ");
+    sprintln(ac.output_freq);
+  #endif
   #ifdef PUBSUB
     publish("/powmr/ac.output_freq", ac.output_freq);
   #endif
 
   ac.output_va = (float)htons(mbus_data[11]);  // 4512
-  sprint("ac.output_va: ");
-  sprintln(ac.output_va);
+  #ifdef VERBOSE_SERIAL
+    sprint("ac.output_va: ");
+    sprintln(ac.output_va);
+  #endif
   #ifdef PUBSUB
     publish("/powmr/ac.output_va", ac.output_va);
   #endif
 
   ac.output_watts = (float)htons(mbus_data[12]);  // 4513
-  sprint("ac.output_watts: ");
-  sprintln(ac.output_watts);
+  #ifdef VERBOSE_SERIAL
+    sprint("ac.output_watts: ");
+    sprintln(ac.output_watts);
+  #endif
   #ifdef PUBSUB
     publish("/powmr/ac.output_watts", ac.output_watts);
   #endif
 
   ac.output_load_percent = (float)htons(mbus_data[13]);  // 4514
-  sprint("ac.output_load_percent: ");
-  sprintln(ac.output_load_percent);
+  #ifdef VERBOSE_SERIAL
+    sprint("ac.output_load_percent: ");
+    sprintln(ac.output_load_percent);
+  #endif
   #ifdef PUBSUB
     publish("/powmr/ac.output_load_percent", ac.output_load_percent);
   #endif
 
   inverter.charger_source_priority = (float)htons(mbus_data[35]);  // 4536
-  sprint("inverter.charger_source_priority: ");
-  sprintln(inverter.charger_source_priority);
+  #ifdef VERBOSE_SERIAL
+    sprint("inverter.charger_source_priority: ");
+    sprintln(inverter.charger_source_priority);
+  #endif
   #ifdef PUBSUB
     publish("/powmr/inverter.charger_source_priority", inverter.charger_source_priority);
   #endif
 
   inverter.output_source_priority = (float)htons(mbus_data[36]);  // 4537
-  sprint("inverter.output_source_priority: ");
-  sprintln(inverter.output_source_priority);
+  #ifdef VERBOSE_SERIAL
+    sprint("inverter.output_source_priority: ");
+    sprintln(inverter.output_source_priority);
+  #endif
   #ifdef PUBSUB
     publish("/powmr/inverter.output_source_priority", inverter.output_source_priority);
   #endif
 
   inverter.charger = (float)htons(mbus_data[54]);  // 4555
-  sprint("inverter.charger: ");
-  sprintln(inverter.charger);
+  #ifdef VERBOSE_SERIAL
+    sprint("inverter.charger: ");
+    sprintln(inverter.charger);
+  #endif
   #ifdef PUBSUB
     publish("/powmr/inverter.charger", inverter.charger);
   #endif
 
   inverter.temp = (float)htons(mbus_data[56]);  // 4557
-  sprint("inverter.temp: ");
-  sprintln(inverter.temp);
+  #ifdef VERBOSE_SERIAL
+    sprint("inverter.temp: ");
+    sprintln(inverter.temp);
+  #endif
   #ifdef PUBSUB
     publish("/powmr/inverter.temp", inverter.temp);
   #endif
@@ -361,6 +434,67 @@ void send_request() {
     // snprintf((char *)myPtr, 100, "New voltage coeff: %3.5f, updated batt_v_compensation_k %3.5f", 
     //          new_k, batt_v_compensation_k);
   }
+
+  // send compensation
+  #ifdef VERBOSE_SERIAL
+    sprint("batt_v_compensation_k: ");
+    sprintln(batt_v_compensation_k);
+  #endif
+  #ifdef PUBSUB
+    publish("/powmr/dc.batt_v_compensation_k", batt_v_compensation_k);
+  #endif
+
+  // voltage corrected by cable losses
+  dc.voltage_corrected = dc.voltage - (batt_v_compensation_k * dc.charge_current)
+                                    + (batt_v_compensation_k * dc.discharge_current);
+  
+  #ifdef VERBOSE_SERIAL
+    sprint("dc.voltage_corrected: ");
+    sprintln(dc.voltage_corrected);
+  #endif
+  #ifdef PUBSUB
+    publish("/powmr/dc.voltage_corrected", dc.voltage_corrected);
+  #endif
+  
+  // simple soc calculation
+  float soc = 100.0 * (dc.voltage_corrected - BATT_MIN_VOLTAGE) / (BATT_MAX_VOLTAGE - BATT_MIN_VOLTAGE);
+  // limit to 0-100
+  dc.soc = (float)constrain(soc, 0, 100);
+  #ifdef VERBOSE_SERIAL
+    sprint("inverter.soc: ");
+    sprintln(dc.soc);
+  #endif
+  #ifdef PUBSUB
+    publish("/powmr/inverter.soc", dc.soc);
+  #endif
+
+  // call efficiency VA
+  float input_power = dc.pv_power + dc.discharge_power;
+  float eff_va = 0;
+  if (input_power > 0) {
+    eff_va *= (ac.output_va / input_power);
+  }
+  #ifdef VERBOSE_SERIAL
+    sprint("inverter.eff_va: ");
+    sprintln(eff_va);
+  #endif
+  #ifdef PUBSUB
+    publish("/powmr/inverter.eff_va", eff_va);
+  #endif
+
+  // call efficiency WATTS
+  float  eff_w = 0;
+  if (input_power > 0) {
+    eff_w *= (ac.output_va / input_power);
+  }
+  #ifdef VERBOSE_SERIAL
+    sprint("inverter.eff_w: ");
+    sprintln(eff_w);
+  #endif
+  #ifdef PUBSUB
+    publish("/powmr/inverter.eff_w", eff_w);
+  #endif
+  
   
   dc.voltage_ = dc.voltage;
   dc.charge_current_ = dc.charge_current;
@@ -369,25 +503,6 @@ void send_request() {
   // All reads successful
   i_state_available = 1;
   sprintln("All data successfully read");
-}
-
-// runs periodically to monitor and control battery voltage 
-void controller() {
-  if (i_state_available) {
-    batt_v_corrected = dc.voltage - (batt_v_compensation_k * dc.charge_current)
-                                    + (batt_v_compensation_k * dc.discharge_current);
-    // publish_float4("/iot/node/powmr/s/dc.voltage_corrected", batt_v_corrected);
-    // publish_float4("/iot/node/powmr/s/batt_v_compensation_k", batt_v_compensation_k);
-    sprint("batt_v_corrected: ");
-    sprintln(batt_v_corrected);
-    sprint("batt_v_compensation_k: ");
-    sprintln(batt_v_compensation_k);
-    
-    dc.soc = 100.0 * (dc.voltage - BATT_MIN_VOLTAGE) / (BATT_MAX_VOLTAGE - BATT_MIN_VOLTAGE);
-    // publish_float("/iot/node/powmr/s/dc.soc", dc.soc);
-    sprint("dc.soc: ");
-    sprintln(dc.soc);
-  }
 }
 
 void OTA_setup() {
@@ -620,7 +735,6 @@ void node_setup() {
 
   // timer.setInterval(5000, alivePrint);
   timer.setInterval(READ_INTERVAL, send_request);
-  timer.setInterval(READ_INTERVAL*2, controller);
 }
 
 void setup() {
