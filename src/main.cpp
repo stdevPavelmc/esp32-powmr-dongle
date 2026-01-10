@@ -10,7 +10,7 @@
 #include <ArduinoOTA.h>
 #include <FS.h>
 #include <SPIFFS.h>
-// #include <ArduinoJson.h>          //https://github.com/bblanchon/ArduinoJson
+#include <ArduinoJson.h>          //https://github.com/bblanchon/ArduinoJson
 #include <SoftwareSerial.h>
 #include <ModbusMaster.h>
 #include <SimpleTimer.h>          // Simple Task Time Manager
@@ -76,14 +76,6 @@ bool wifi_mode = 0; // 0 = client | 1 = AP
 // define SoftWare Serial
 EspSoftwareSerial::UART SSerial;
 
-// global invertor state
-
-uint8_t i_state_available = 0;
-float batt_v_compensation_k = 0.01;  // about 0.4v at 60a, 60 * x = 0.4 
-float batt_v_corrected; 
-
-uint8_t charger_active = 0;
-
 #define READ_INTERVAL  15000 // 15 seconds, it's millis
 
 // this is the linear part of the range
@@ -118,8 +110,9 @@ struct DCData {
   float discharge_current_;
   float charge_power;
   float discharge_power;
-  float soc = 0;
   float charged_voltage = 28.8;
+  float batt_v_compensation_k = 0.01;
+  float new_k = 0;
 };
 
 DCData dc;
@@ -154,6 +147,10 @@ struct InverterData {
     2: AC 
   */
   uint16_t charger_source_priority;
+  float eff_va = 0;
+  float eff_w = 0;
+  float soc = 0;
+  byte valid_info = 0;
 };
 
 InverterData inverter;
@@ -223,10 +220,11 @@ void send_request() {
   sprintln("Reading registers 4501-4561 (61 regs)");
   if (!read_registers_chunked(4501, MBUS_REGISTERS, mbus_data)) {
     sprintln("Error reading registers");
-    i_state_available = 0;
+    inverter.valid_info = 0;
     return;
   }
-  
+  // valid info is only declared at the end, to get here the last value during the calculations
+
   // Process data (indexes relative to 4501)
   inverter.op_mode = (float)htons(mbus_data[0]);  // 4501
   #ifdef VERBOSE_SERIAL
@@ -426,27 +424,32 @@ void send_request() {
   // Battery voltage compensation calculation
   float charge_current_change = -(dc.discharge_current - dc.discharge_current_) 
                                   + (dc.charge_current - dc.charge_current_);
-  if (i_state_available && abs(charge_current_change) > 5.0) {
-    float new_k = (dc.voltage - dc.voltage_) / charge_current_change;
-    batt_v_compensation_k = batt_v_compensation_k + (new_k - batt_v_compensation_k) * 0.1;
+  if (inverter.valid_info && abs(charge_current_change) > 5.0) {
+    dc.new_k = (dc.voltage - dc.voltage_) / charge_current_change;
+    dc.batt_v_compensation_k += (dc.new_k - dc.batt_v_compensation_k) * 0.1;
     
-    // myPtr = charArr;
-    // snprintf((char *)myPtr, 100, "New voltage coeff: %3.5f, updated batt_v_compensation_k %3.5f", 
-    //          new_k, batt_v_compensation_k);
+    // new compensation factor
+    #ifdef VERBOSE_SERIAL
+      sprint("dc.new: ");
+      sprintln(dc.new_k);
+    #endif
+    #ifdef PUBSUB
+      publish("/powmr/dc.new_k", inverter.temp);
+    #endif
   }
 
   // send compensation
   #ifdef VERBOSE_SERIAL
-    sprint("batt_v_compensation_k: ");
-    sprintln(batt_v_compensation_k);
+    sprint("dc.batt_v_compensation_k: ");
+    sprintln(dc.batt_v_compensation_k);
   #endif
   #ifdef PUBSUB
-    publish("/powmr/dc.batt_v_compensation_k", batt_v_compensation_k);
+    publish("/powmr/dc.batt_v_compensation_k", dc.batt_v_compensation_k);
   #endif
 
   // voltage corrected by cable losses
-  dc.voltage_corrected = dc.voltage - (batt_v_compensation_k * dc.charge_current)
-                                    + (batt_v_compensation_k * dc.discharge_current);
+  dc.voltage_corrected = dc.voltage - (dc.batt_v_compensation_k * dc.charge_current)
+                                    + (dc.batt_v_compensation_k * dc.discharge_current);
   
   #ifdef VERBOSE_SERIAL
     sprint("dc.voltage_corrected: ");
@@ -459,40 +462,38 @@ void send_request() {
   // simple soc calculation
   float soc = 100.0 * (dc.voltage_corrected - BATT_MIN_VOLTAGE) / (BATT_MAX_VOLTAGE - BATT_MIN_VOLTAGE);
   // limit to 0-100
-  dc.soc = (float)constrain(soc, 0, 100);
+  inverter.soc = (float)constrain(soc, 0, 100);
   #ifdef VERBOSE_SERIAL
     sprint("inverter.soc: ");
-    sprintln(dc.soc);
+    sprintln(inverter.soc);
   #endif
   #ifdef PUBSUB
-    publish("/powmr/inverter.soc", dc.soc);
+    publish("/powmr/inverter.soc", inverter.soc);
   #endif
 
   // call efficiency VA
   float input_power = dc.pv_power + dc.discharge_power;
-  float eff_va = 0;
   if (input_power > 0) {
-    eff_va *= (ac.output_va / input_power);
+    inverter.eff_va = (100.0 * ac.output_va) / input_power;
   }
   #ifdef VERBOSE_SERIAL
     sprint("inverter.eff_va: ");
-    sprintln(eff_va);
+    sprintln(inverter.eff_va);
   #endif
   #ifdef PUBSUB
-    publish("/powmr/inverter.eff_va", eff_va);
+    publish("/powmr/inverter.eff_va", inverter.eff_va);
   #endif
 
   // call efficiency WATTS
-  float  eff_w = 0;
   if (input_power > 0) {
-    eff_w *= (ac.output_va / input_power);
+    inverter.eff_w = (100.0 * ac.output_watts) / input_power;
   }
   #ifdef VERBOSE_SERIAL
     sprint("inverter.eff_w: ");
-    sprintln(eff_w);
+    sprintln(inverter.eff_w);
   #endif
   #ifdef PUBSUB
-    publish("/powmr/inverter.eff_w", eff_w);
+    publish("/powmr/inverter.eff_w", inverter.eff_w);
   #endif
   
   
@@ -501,7 +502,8 @@ void send_request() {
   dc.discharge_current_ = dc.discharge_current;
   
   // All reads successful
-  i_state_available = 1;
+  // declare valid info
+  inverter.valid_info = 1;
   sprintln("All data successfully read");
 }
 
@@ -561,6 +563,61 @@ void mDNS_setup() {
   MDNS.addService("http", "tcp", 80);
 }
 
+// json data
+// Function to generate JSON strings
+String data_JSON() {
+    // Create a JSON object, adjust size.
+    //StaticJsonDocument<650> doc;
+    DynamicJsonDocument doc(650);
+    
+    // Create "ac" object in the JSON structure
+    JsonObject acObj = doc.createNestedObject("ac");
+    acObj["input_freq"] = ac.input_freq;
+    acObj["input_voltage"] = ac.input_voltage;
+    acObj["output_freq"] = ac.output_freq;
+    acObj["output_load_percent"] = ac.output_load_percent;
+    acObj["output_va"] = ac.output_va;
+    acObj["output_voltage"] = ac.output_voltage;
+    acObj["output_watts"] = ac.output_watts;
+
+    // Create "dc" object in the JSON structure
+    JsonObject dcObj = doc.createNestedObject("dc");
+    dcObj["batt_v_compensation_k"] = dc.batt_v_compensation_k;
+    dcObj["charge_current"] = dc.charge_current;
+    dcObj["charge_power"] = dc.charge_power;
+    dcObj["discharge_current"] = dc.discharge_current;
+    dcObj["discharge_power"] = dc.discharge_power;
+    dcObj["new_k"] = dc.new_k;
+    dcObj["pv_current"] = dc.pv_current;
+    dcObj["pv_voltage"] = dc.pv_voltage;
+    dcObj["pv_power"] = dc.pv_power;
+    dcObj["voltage"] = dc.voltage;
+    dcObj["voltage_corrected"] = dc.voltage_corrected;
+
+    // Create "inverter" object in the JSON structure
+    JsonObject iObj = doc.createNestedObject("inverter");
+    iObj["read_interval_ms"] = READ_INTERVAL;
+    iObj["valid_info"] = inverter.valid_info;
+    iObj["charger"] = inverter.charger;
+    iObj["charger_source_priority"] = inverter.charger_source_priority;
+    iObj["eff_va"] = inverter.eff_va;
+    iObj["eff_w"] = inverter.eff_w;
+    iObj["op_mode"] = inverter.op_mode;
+    iObj["op_mode"] = inverter.op_mode;
+    iObj["output_source_priority"] = inverter.output_source_priority;
+    iObj["soc"] = inverter.soc;
+    iObj["temp"] = inverter.temp;
+
+    // Serialize the JSON object to a string
+    String output;
+    serializeJson(doc, output);
+    doc.garbageCollect();
+    doc.clear();
+
+    // return the json string
+    return output;
+}
+
 // 404 handler >  redir to /
 void notFound(AsyncWebServerRequest *request) {
   request->redirect("/");
@@ -569,19 +626,30 @@ void notFound(AsyncWebServerRequest *request) {
 // index
 void serveIndex(AsyncWebServerRequest *request) {
   request->send(SPIFFS, "/index.html");
-  #ifdef DEBUG
+  #ifdef VERBOSE_SERIAL
     sprintln("/ ");
+  #endif
+}
+
+//  status
+void serveStatus(AsyncWebServerRequest *request) {
+  request->send(200, "application/json", data_JSON());
+  #ifdef VERBOSE_SERIAL
+    sprintln("/status");
   #endif
 }
 
 void webserver_setup() {
   // defaults
 
+  // not found
+  server.onNotFound(notFound);
+
   // Route for root / web page
   server.on("/", HTTP_GET, serveIndex);
 
-  // not found
-  server.onNotFound(notFound);
+  // staus in json format
+  server.on("/api/status", HTTP_GET, serveStatus);
 
   #ifdef WEBSERIAL
     // WebSerial is accessible at "<IP Address>/webserial" in browser
