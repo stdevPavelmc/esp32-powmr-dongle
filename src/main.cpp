@@ -24,7 +24,7 @@
 #define WEBSERIAL 1
 #define VERBOSE_SERIAL 1
 
-#define VERSION             1.04
+#define VERSION  2.5
 
 // rewrite prints
 #ifdef WEBSERIAL
@@ -151,6 +151,8 @@ struct InverterData {
   float eff_w = 0;
   float soc = 0;
   byte valid_info = 0;
+  unsigned int read_time = 0;
+  unsigned int read_time_mean = 0;
 };
 
 InverterData inverter;
@@ -218,11 +220,47 @@ uint8_t read_registers_chunked(uint16_t start_addr, uint16_t total_regs, uint16_
 void send_request() {
   // Read all registers 4501-4561 (61 registers total)
   sprintln("Reading registers 4501-4561 (61 regs)");
+  unsigned long start = millis();
   if (!read_registers_chunked(4501, MBUS_REGISTERS, mbus_data)) {
     sprintln("Error reading registers");
     inverter.valid_info = 0;
     return;
   }
+
+  // timing
+  unsigned long stop = millis();
+  if (stop > start) {
+    stop -= start;
+    inverter.read_time = (unsigned int)stop;
+
+    // feed the mean time to read
+    byte HIST = 10;
+    if (inverter.read_time_mean == 0) {
+      // first readding, reset
+      inverter.read_time_mean = inverter.read_time;
+    } else {
+      // add histeresis, reuse stop var
+      stop = inverter.read_time_mean;
+      inverter.read_time_mean = (float)stop * ((HIST - 1.0)/HIST) + (inverter.read_time / HIST);
+    }
+    
+    #ifdef VERBOSE_SERIAL
+      sprint("inverter.read_time: ");
+      sprintln(inverter.read_time);
+    #endif
+    #ifdef PUBSUB
+      publish("/powmr/inverter.read_time", inverter.read_time);
+    #endif
+
+    #ifdef VERBOSE_SERIAL
+      sprint("inverter.read_time_mean: ");
+      sprintln(inverter.read_time_mean);
+    #endif
+    #ifdef PUBSUB
+      publish("/powmr/inverter.read_time_mean", inverter.read_time_mean);
+    #endif
+  }
+  
   // valid info is only declared at the end, to get here the last value during the calculations
 
   // Process data (indexes relative to 4501)
@@ -430,11 +468,11 @@ void send_request() {
     
     // new compensation factor
     #ifdef VERBOSE_SERIAL
-      sprint("dc.new: ");
+      sprint("dc.new_k: ");
       sprintln(dc.new_k);
     #endif
     #ifdef PUBSUB
-      publish("/powmr/dc.new_k", inverter.temp);
+      publish("/powmr/dc.new_k", dc.new_k);
     #endif
   }
 
@@ -563,12 +601,10 @@ void mDNS_setup() {
   MDNS.addService("http", "tcp", 80);
 }
 
-// json data
 // Function to generate JSON strings
 String data_JSON() {
-    // Create a JSON object, adjust size.
-    //StaticJsonDocument<650> doc;
-    DynamicJsonDocument doc(650);
+    // Create a JSON object, lib relocates and calc space needed
+    JsonDocument doc;
     
     // Create "ac" object in the JSON structure
     JsonObject acObj = doc.createNestedObject("ac");
@@ -603,15 +639,22 @@ String data_JSON() {
     iObj["eff_va"] = inverter.eff_va;
     iObj["eff_w"] = inverter.eff_w;
     iObj["op_mode"] = inverter.op_mode;
-    iObj["op_mode"] = inverter.op_mode;
     iObj["output_source_priority"] = inverter.output_source_priority;
     iObj["soc"] = inverter.soc;
     iObj["temp"] = inverter.temp;
+    iObj["read_time"] = inverter.read_time;
+    iObj["read_time_mean"] = inverter.read_time_mean;
+    
+    // Safety validation
+    if (doc.overflowed()) {
+        sprintln("ERROR - Json overflowed");
+        sprint("Doc Usage: ");
+        sprintln((int)doc.memoryUsage());
+    }
 
     // Serialize the JSON object to a string
     String output;
     serializeJson(doc, output);
-    doc.garbageCollect();
     doc.clear();
 
     // return the json string
@@ -811,6 +854,9 @@ void setup() {
 
   // Wifi connect, client and start server if not client
   do_wifi();
+  
+  // program a 3 minutes check for network
+  timer.setInterval(3*60*1000, check_wifi); 
 
   #ifdef PUBSUB
     // mosquitto pubsub setup
@@ -865,9 +911,6 @@ void setup() {
 }
 
 void loop() {
-  // check wifi
-  check_wifi();
-
   // handle OTA uppdates
   ArduinoOTA.handle();
 
