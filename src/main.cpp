@@ -23,8 +23,17 @@
 /********* Configurable flags *************/
 #define WEBSERIAL 1
 #define VERBOSE_SERIAL 1
-
 #define VERSION  2.5
+
+// Battery Gas Gauge Configuration
+const float MAXIMUM_ENERGY = 12.8*100*2;  // Wh
+const float MINIMUM_VOLTAGE = 22.0;   // V
+const float MAXIMUM_VOLTAGE = 28.8;   // V
+
+// Tracking variables
+unsigned long last_update_millis = 0;
+bool first_run = true;
+
 
 // rewrite prints
 #ifdef WEBSERIAL
@@ -101,6 +110,7 @@ struct DCData {
   float pv_voltage;
   float pv_power;
   float pv_current;
+  float pv_energy_produced;
   float voltage;
   float voltage_;
   float voltage_corrected;
@@ -149,10 +159,12 @@ struct InverterData {
   uint16_t charger_source_priority;
   float eff_va = 0;
   float eff_w = 0;
-  float soc = 0;
+  float soc = 0;    // 0-100% per voltage range
   byte valid_info = 0;
   unsigned int read_time = 0;
   unsigned int read_time_mean = 0;
+  float battery_energy = 0.0;  // Wh
+  float gas_gauge = 0.0;       // 0-100%
 };
 
 InverterData inverter;
@@ -164,6 +176,164 @@ void publish(char* topic, float payload) {
   psclient.publish(topic, payload_str.c_str());
 }
 #endif
+
+// gas gauge functions
+
+void updateGasGauge() {
+  inverter.gas_gauge = (inverter.battery_energy / MAXIMUM_ENERGY) * 100.0;
+  
+  // Ensure 0-100 range
+  if (inverter.gas_gauge < 0.0) inverter.gas_gauge = 0.0;
+  if (inverter.gas_gauge > 100.0) inverter.gas_gauge = 100.0;
+}
+
+void updateBatteryEnergy(float voltage, float charge_current, float discharge_current) {
+  // some static vars
+  static bool first_run = 1;
+  static unsigned long last_update_millis = 0;
+  //runtime vars
+  unsigned long current_millis = millis();
+  unsigned long delta_millis;
+  
+  // Handle millis() overflow (happens every ~49.7 days)
+  if (current_millis < last_update_millis) {
+    delta_millis = (0xFFFFFFFF - last_update_millis) + current_millis + 1;
+  } else {
+    delta_millis = current_millis - last_update_millis;
+  }
+  
+  // Skip first run to establish baseline
+  if (first_run) {
+    first_run = false;
+    last_update_millis = current_millis;
+    return;
+  }
+  
+  // Check voltage limits and reset if needed
+  if (voltage <= MINIMUM_VOLTAGE) {
+    inverter.battery_energy = 0.0;
+    inverter.gas_gauge = 0.0;
+    last_update_millis = current_millis;
+    Serial.println("Battery depleted - Reset to 0%");
+    return;
+  }
+  
+  if (voltage >= MAXIMUM_VOLTAGE) {
+    inverter.battery_energy = MAXIMUM_ENERGY;
+    inverter.gas_gauge = 100.0;
+    last_update_millis = current_millis;
+    Serial.println("Battery full - Reset to 100%");
+    return;
+  }
+  
+  // Calculate net current (positive = charging, negative = discharging)
+  float net_current = charge_current - discharge_current;
+  
+  // Convert time to hours
+  float delta_hours = delta_millis / 3600000.0;
+  
+  // Calculate energy change (Wh = V * A * h)
+  float energy_delta = voltage * net_current * delta_hours;
+  
+  // Update battery energy
+  inverter.battery_energy += energy_delta;
+  
+  // Clamp to valid range
+  if (inverter.battery_energy < 0.0) {
+    inverter.battery_energy = 0.0;
+  }
+  if (inverter.battery_energy > MAXIMUM_ENERGY) {
+    inverter.battery_energy = MAXIMUM_ENERGY;
+  }
+  
+  // Update gas gauge percentage
+  updateGasGauge();
+  
+  // Update timestamp
+  last_update_millis = current_millis;
+}
+
+// pv energy produced
+void updatePVEnergy(float pv_voltage, float pv_current, float pv_power) {
+  // Some statics
+  static unsigned long night_start_millis = 0;
+  static bool first_run = true;
+  static bool is_night = false;
+  static bool night_reset_done = false;
+  static bool first_pv_run = true;
+  static unsigned long last_pv_update_millis = 0;
+  // vars
+  unsigned long current_millis = millis();
+  unsigned long delta_millis;
+  
+  // Night detection and reset logic
+  if (pv_voltage <= 0.0) {
+    // PV voltage is zero (nighttime)
+    if (!is_night) {
+      // Night just started
+      is_night = true;
+      night_start_millis = current_millis;
+      night_reset_done = false;
+    } else {
+      // Already in night, check if 6 hours have passed
+      unsigned long night_duration;
+      if (current_millis < night_start_millis) {
+        // Handle millis overflow during night
+        night_duration = (0xFFFFFFFF - night_start_millis) + current_millis + 1;
+      } else {
+        night_duration = current_millis - night_start_millis;
+      }
+      
+      // 6 hours = 6 * 60 * 60 * 1000 = 21600000 milliseconds
+      if (night_duration >= 21600000 && !night_reset_done) {
+        dc.pv_energy_produced = 0.0;
+        night_reset_done = true;
+        Serial.println("Night detected (6h) - PV energy reset to 0");
+      }
+    }
+    
+    last_pv_update_millis = current_millis;
+    return;  // Don't accumulate energy during night
+  } else {
+    // PV voltage is present (daytime)
+    if (is_night) {
+      // Day just started
+      is_night = false;
+      sprint("==> Night END");
+    }
+  }
+  
+  // Handle millis() overflow
+  if (current_millis < last_pv_update_millis) {
+    delta_millis = (0xFFFFFFFF - last_pv_update_millis) + current_millis + 1;
+  } else {
+    delta_millis = current_millis - last_pv_update_millis;
+  }
+  
+  // Skip first run to establish baseline
+  if (first_pv_run) {
+    first_pv_run = false;
+    last_pv_update_millis = current_millis;
+    return;
+  }
+  
+  // Convert time to hours
+  float delta_hours = delta_millis / 3600000.0;
+  
+  // Calculate energy produced (use pv_power if available, otherwise V*A)
+  float energy_delta;
+  if (pv_power > 0.0) {
+    energy_delta = pv_power * delta_hours;  // Wh = W * h
+  } else {
+    energy_delta = pv_voltage * pv_current * delta_hours;  // Wh = V * A * h
+  }
+  
+  // Accumulate total energy produced
+  dc.pv_energy_produced += energy_delta;
+  
+  // Update timestamp
+  last_pv_update_millis = current_millis;
+}
 
 // Read registers in chunks with retry logic
 uint8_t read_registers_chunked(uint16_t start_addr, uint16_t total_regs, uint16_t *data) {
@@ -534,17 +704,48 @@ void send_request() {
     publish("/powmr/inverter.eff_w", inverter.eff_w);
   #endif
   
-  
   dc.voltage_ = dc.voltage;
   dc.charge_current_ = dc.charge_current;
   dc.discharge_current_ = dc.discharge_current;
   
-  // All reads successful
   // declare valid info
   inverter.valid_info = 1;
-  sprintln("All data successfully read");
+
+  // update energy on battery
+  updateBatteryEnergy(dc.voltage_corrected, dc.charge_current, dc.discharge_current);
+
+  // gas gauge
+  #ifdef VERBOSE_SERIAL
+    sprint("inverter.gas_gauge: ");
+    sprintln(inverter.gas_gauge);
+  #endif
+  #ifdef PUBSUB
+    publish("/powmr/inverter.gas_gauge", inverter.gas_gauge);
+  #endif
+
+  // battery energy
+  #ifdef VERBOSE_SERIAL
+    sprint("inverter.battery_energy: ");
+    sprintln(inverter.battery_energy);
+  #endif
+  #ifdef PUBSUB
+    publish("/powmr/inverter.battery_energy", inverter.battery_energy);
+  #endif
+
+  // PV produced energy
+  updatePVEnergy(dc.pv_voltage, dc.pv_current, dc.pv_power);
+  
+  // PV energy
+  #ifdef VERBOSE_SERIAL
+    sprint("dc.pv_energy_produced: ");
+    sprintln(dc.pv_energy_produced);
+  #endif
+  #ifdef PUBSUB
+    publish("/powmr/dc.pv_energy_produced", dc.pv_energy_produced);
+  #endif
 }
 
+// OTA settings and mDSN
 void OTA_setup() {
   ArduinoOTA
       .onStart([]()
@@ -627,6 +828,7 @@ String data_JSON() {
     dcObj["pv_current"] = dc.pv_current;
     dcObj["pv_voltage"] = dc.pv_voltage;
     dcObj["pv_power"] = dc.pv_power;
+    dcObj["pv_energy_produced"] = dc.pv_energy_produced;
     dcObj["voltage"] = dc.voltage;
     dcObj["voltage_corrected"] = dc.voltage_corrected;
 
@@ -644,6 +846,8 @@ String data_JSON() {
     iObj["temp"] = inverter.temp;
     iObj["read_time"] = inverter.read_time;
     iObj["read_time_mean"] = inverter.read_time_mean;
+    iObj["gas_gauge"] = inverter.gas_gauge;
+    iObj["battery_energy"] = inverter.battery_energy;
     
     // Safety validation
     if (doc.overflowed()) {
