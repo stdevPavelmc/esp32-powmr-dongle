@@ -2,12 +2,15 @@
 
 Based on the work of [Leo Designer](https://github.com/leodesigner/powmr_comm)
 
+![web-server](./images/web-server.png)
+
 ## Features
 
 This code will do:
 - Connect to your WiFi network (see [WiFi](#wifi) section)
-- Connect to a influxdb cloud instane with indlux v2.x protocol (see [InfluxDB](#influxdb) section)
+- Connect to a influxdb cloud instance with influxdb v2.x protocol (see [InfluxDB](#influxdb) section. disbled by default)
 - Make available a `/api/status` json endpoint in json format to consume and use on the index.html page (see [Json](#json) sections)
+- A http webserver (sample image on the top of this document) that can be called using hostname.local (see WiFi configuration for details on hostname)
 
 ## WiFi
 
@@ -98,3 +101,4 @@ The `/api/status` will produce a json like this:
 Please notice the `inverter.valid_info` variable, the data is actual and valis only if this parameter is `1`; and the `inverter.read_interval_ms` variable tha reflects the time between measuremenst (it's a #define on the file, read takes between 6-12 seconds with retries)
 
 WARNING: This json data will change as this is a work in progress...
+
