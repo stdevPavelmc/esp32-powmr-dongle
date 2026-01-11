@@ -16,6 +16,11 @@ async function fetchStatus() {
         const res = await fetch('/api/status');
         const data = await res.json();
         
+        // update data
+        renderDashboard(data);
+        updateFooter();
+
+        // select the read_interval
         if (data.inverter && data.inverter.read_interval_ms) {
             const newInterval = data.inverter.read_interval_ms / 1000; // seconds
             if (newInterval !== pollInterval) {
@@ -23,9 +28,6 @@ async function fetchStatus() {
                 schedulePoll();
             }
         }
-        
-        renderDashboard(data);
-        updateFooter();
     } catch (e) {
         console.error('Failed to fetch status:', e);
         document.getElementById('lastUpdate').textContent = 'Connection error';
@@ -58,13 +60,13 @@ function createCard(key, value, sectionKey) {
     val.className = 'card-value';
     val.textContent = formatValue(value);
     
-    const unitEl = document.createElement('div');
+    const unitEl = document.createElement('span');
     unitEl.className = 'card-unit';
-    unitEl.textContent = unit;
+    unitEl.textContent = ' ' + unit;
     
     card.appendChild(title);
     card.appendChild(val);
-    card.appendChild(unitEl);
+    val.appendChild(unitEl);
     
     return card;
 }

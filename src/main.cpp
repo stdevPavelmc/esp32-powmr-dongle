@@ -205,15 +205,6 @@ uint16_t calculate_next_interval() {
   return base;
 }
 
-// gas gauge functions
-void updateGasGauge() {
-  inverter.gas_gauge = (inverter.battery_energy / MAXIMUM_ENERGY) * 100.0;
-  
-  // Ensure 0-100 range
-  if (inverter.gas_gauge < 0.0) inverter.gas_gauge = 0.0;
-  if (inverter.gas_gauge > 100.0) inverter.gas_gauge = 100.0;
-}
-
 void updateBatteryEnergy(float voltage, float charge_current, float discharge_current) {
   // some static vars
   static bool first_run = 1;
@@ -274,7 +265,13 @@ void updateBatteryEnergy(float voltage, float charge_current, float discharge_cu
   }
   
   // Update gas gauge percentage
-  updateGasGauge();
+  if (inverter.battery_energy > 0) {
+    inverter.gas_gauge = (inverter.battery_energy * 100) / MAXIMUM_ENERGY;
+    
+    // Ensure 0-100 range
+    if (inverter.gas_gauge < 0.0) inverter.gas_gauge = 0.0;
+    if (inverter.gas_gauge > 100.0) inverter.gas_gauge = 100.0;
+  }
   
   // Update timestamp
   last_update_millis = current_millis;
@@ -892,7 +889,9 @@ String data_JSON() {
     dcObj["charge_current"] = dc.charge_current;
     dcObj["charge_power"] = dc.charge_power;
     dcObj["discharge_current"] = dc.discharge_current;
+    dcObj["charge_current"] = dc.charge_current;
     dcObj["discharge_power"] = dc.discharge_power;
+    dcObj["charge_power"] = dc.charge_power;
     dcObj["new_k"] = dc.new_k;
     dcObj["pv_current"] = dc.pv_current;
     dcObj["pv_voltage"] = dc.pv_voltage;
