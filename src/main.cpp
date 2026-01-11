@@ -45,7 +45,8 @@ bool first_run = true;
 #endif
 
 // enable or disable pubsub features
-#define PUBSUB
+// #define PUBSUB
+// MQTT push disabled, we ralay on HTTP only from now
 
 // simple timer
 SimpleTimer timer;
@@ -85,7 +86,11 @@ bool wifi_mode = 0; // 0 = client | 1 = AP
 // define SoftWare Serial
 EspSoftwareSerial::UART SSerial;
 
-#define READ_INTERVAL  15000 // 15 seconds, it's millis
+// Add these global variables near the top with other globals
+#define INITIAL_READ_INTERVAL 15000 // 15 seconds initial
+uint16_t dynamic_read_interval = INITIAL_READ_INTERVAL;
+uint8_t consecutive_failures = 0;
+const uint8_t MAX_FAILURES = 3;
 
 // this is the linear part of the range
 #define BATT_MAX_VOLTAGE 27
@@ -177,8 +182,30 @@ void publish(char* topic, float payload) {
 }
 #endif
 
-// gas gauge functions
+// dynamic readding interval
+uint16_t calculate_next_interval() {
+  if (inverter.read_time_mean == 0) {
+    return INITIAL_READ_INTERVAL;
+  }
+  
+  // Round up to next 5 second multiple
+  uint16_t base = (inverter.read_time_mean / 5000) * 5000;
+  if (inverter.read_time_mean % 5000 != 0) {
+    base += 5000;
+  }
+  
+  // Ensure minimum of 5 seconds max of 30 seconds
+  if (base < 5000) {
+    base = 5000;
+  }
+  if (base > 30000) {
+    base = 30000;
+  }
+  
+  return base;
+}
 
+// gas gauge functions
 void updateGasGauge() {
   inverter.gas_gauge = (inverter.battery_energy / MAXIMUM_ENERGY) * 100.0;
   
@@ -394,8 +421,32 @@ void send_request() {
   if (!read_registers_chunked(4501, MBUS_REGISTERS, mbus_data)) {
     sprintln("Error reading registers");
     inverter.valid_info = 0;
+    consecutive_failures++;
+    
+    #ifdef VERBOSE_SERIAL
+      sprint("Consecutive failures: ");
+      sprintln(consecutive_failures);
+    #endif
+    
+    // Reset to initial interval after MAX_FAILURES
+    if (consecutive_failures >= MAX_FAILURES) {
+      dynamic_read_interval = INITIAL_READ_INTERVAL;
+      consecutive_failures = 0;
+      
+      #ifdef VERBOSE_SERIAL
+        sprintln("Max failures reached - reset to 15s interval");
+      #endif
+      
+      // Update timer
+      timer.deleteTimer(timer.getNumTimers() - 1);
+      timer.setInterval(dynamic_read_interval, send_request);
+    }
+    
     return;
   }
+
+  // Success - reset failure counter
+  consecutive_failures = 0;
 
   // timing
   unsigned long stop = millis();
@@ -429,6 +480,24 @@ void send_request() {
     #ifdef PUBSUB
       publish("/powmr/inverter.read_time_mean", inverter.read_time_mean);
     #endif
+  }
+
+  // Calculate and update interval if needed
+  uint16_t new_interval = calculate_next_interval();
+  if (new_interval != dynamic_read_interval) {
+    dynamic_read_interval = new_interval;
+    
+    #ifdef VERBOSE_SERIAL
+      sprint("Adjusting read interval to: ");
+      sprint(dynamic_read_interval);
+      sprintln(" ms");
+    #endif
+    
+    // Remove old timer and create new one
+    // Note: SimpleTimer doesn't have a direct "update" method
+    // This assumes send_request is the last timer added
+    timer.deleteTimer(timer.getNumTimers() - 1);
+    timer.setInterval(dynamic_read_interval, send_request);
   }
   
   // valid info is only declared at the end, to get here the last value during the calculations
@@ -834,7 +903,7 @@ String data_JSON() {
 
     // Create "inverter" object in the JSON structure
     JsonObject iObj = doc.createNestedObject("inverter");
-    iObj["read_interval_ms"] = READ_INTERVAL;
+    iObj["read_interval_ms"] = dynamic_read_interval;
     iObj["valid_info"] = inverter.valid_info;
     iObj["charger"] = inverter.charger;
     iObj["charger_source_priority"] = inverter.charger_source_priority;
@@ -1048,8 +1117,8 @@ void node_setup() {
   // private method
   //node.ku16MBResponseTimeout = 20; // ms of response timeout
 
-  // timer.setInterval(5000, alivePrint);
-  timer.setInterval(READ_INTERVAL, send_request);
+  // Start with initial interval
+  timer.setInterval(dynamic_read_interval, send_request);
 }
 
 void setup() {
