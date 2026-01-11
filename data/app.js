@@ -1,5 +1,5 @@
 let namesData = {};
-let pollInterval = 15;
+let pollInterval = 5000; // 5 seconds
 let timeoutId = null;
 
 async function fetchNames() {
@@ -20,14 +20,14 @@ async function fetchStatus() {
         renderDashboard(data);
         updateFooter();
 
-        // select the read_interval
-        if (data.inverter && data.inverter.read_interval_ms) {
-            const newInterval = data.inverter.read_interval_ms / 1000; // seconds
-            if (newInterval !== pollInterval) {
-                pollInterval = newInterval;
-                schedulePoll();
-            }
-        }
+        // // select the read_interval
+        // if (data.inverter && data.inverter.read_interval_ms) {
+        //     const newInterval = data.inverter.read_interval_ms / 1000; // seconds
+        //     if (newInterval !== pollInterval) {
+        //         pollInterval = newInterval;
+        //         schedulePoll();
+        //     }
+        // }
     } catch (e) {
         console.error('Failed to fetch status:', e);
         document.getElementById('lastUpdate').textContent = 'Connection error';
@@ -113,16 +113,12 @@ function updateFooter() {
     document.getElementById('lastUpdate').textContent = `Last update: ${now}`;
 }
 
-function schedulePoll() {
-    if (timeoutId) clearTimeout(timeoutId);
-    timeoutId = setTimeout(() => {
-        fetchStatus();
-    }, pollInterval);
-}
-
 async function init() {
     await fetchNames();
     await fetchStatus();
+    
+    // Set up update intervals
+    setInterval(fetchStatus, pollInterval);
 }
 
-init();
+window.addEventListener('DOMContentLoaded', init);
