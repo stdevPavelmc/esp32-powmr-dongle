@@ -936,7 +936,7 @@ String data_JSON() {
 
 // 404 handler >  redir to /
 void notFound(AsyncWebServerRequest *request) {
-  request->redirect("/");
+  request->send(404, "text/plain", "Not Found");
 }
 
 // index
@@ -955,6 +955,31 @@ void serveStatus(AsyncWebServerRequest *request) {
   #endif
 }
 
+// css
+void serveCSS(AsyncWebServerRequest *request) {
+  request->send(SPIFFS, "/style.css");
+  #ifdef VERBOSE_SERIAL
+    sprintln("/css");
+  #endif
+}
+
+// js
+void serveJS(AsyncWebServerRequest *request) {
+  request->send(SPIFFS, "/app.js");
+  #ifdef VERBOSE_SERIAL
+    sprintln("/jscript ");
+  #endif
+}
+
+// names
+void serveNames(AsyncWebServerRequest *request) {
+  request->send(SPIFFS, "/names.json");
+  #ifdef VERBOSE_SERIAL
+    sprintln("/names.json ");
+  #endif
+}
+
+
 void webserver_setup() {
   // defaults
 
@@ -964,8 +989,18 @@ void webserver_setup() {
   // Route for root / web page
   server.on("/", HTTP_GET, serveIndex);
 
+  // css
+  server.on("/style.css", HTTP_GET, serveCSS);
+
+  // js
+  server.on("/app.js", HTTP_GET, serveJS);
+
   // staus in json format
   server.on("/api/status", HTTP_GET, serveStatus);
+
+  // Names
+  // js
+  server.on("/names.json", HTTP_GET, serveNames);
 
   #ifdef WEBSERIAL
     // WebSerial is accessible at "<IP Address>/webserial" in browser
