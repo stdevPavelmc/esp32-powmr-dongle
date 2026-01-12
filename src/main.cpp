@@ -875,47 +875,48 @@ String data_JSON() {
     
     // Create "ac" object in the JSON structure
     JsonObject acObj = doc.createNestedObject("ac");
-    acObj["input_freq"] = ac.input_freq;
     acObj["input_voltage"] = ac.input_voltage;
+    acObj["input_freq"] = ac.input_freq;
+    acObj["output_voltage"] = ac.output_voltage;
     acObj["output_freq"] = ac.output_freq;
     acObj["output_load_percent"] = ac.output_load_percent;
     acObj["output_va"] = ac.output_va;
-    acObj["output_voltage"] = ac.output_voltage;
     acObj["output_watts"] = ac.output_watts;
 
     // Create "dc" object in the JSON structure
     JsonObject dcObj = doc.createNestedObject("dc");
-    dcObj["batt_v_compensation_k"] = dc.batt_v_compensation_k;
-    dcObj["charge_current"] = dc.charge_current;
-    dcObj["charge_power"] = dc.charge_power;
-    dcObj["discharge_current"] = dc.discharge_current;
-    dcObj["charge_current"] = dc.charge_current;
-    dcObj["discharge_power"] = dc.discharge_power;
-    dcObj["charge_power"] = dc.charge_power;
-    dcObj["new_k"] = dc.new_k;
-    dcObj["pv_current"] = dc.pv_current;
-    dcObj["pv_voltage"] = dc.pv_voltage;
-    dcObj["pv_power"] = dc.pv_power;
-    dcObj["pv_energy_produced"] = dc.pv_energy_produced;
     dcObj["voltage"] = dc.voltage;
     dcObj["voltage_corrected"] = dc.voltage_corrected;
+    dcObj["charge_power"] = dc.charge_power;
+    dcObj["discharge_power"] = dc.discharge_power;
+    dcObj["charge_current"] = dc.charge_current;
+    dcObj["discharge_current"] = dc.discharge_current;
+    dcObj["new_k"] = dc.new_k;
+    dcObj["batt_v_compensation_k"] = dc.batt_v_compensation_k;
+
+    // fake pv object
+    JsonObject pvObj = doc.createNestedObject("pv");
+    pvObj["pv_voltage"] = dc.pv_voltage;
+    pvObj["pv_power"] = dc.pv_power;
+    pvObj["pv_current"] = dc.pv_current;
+    pvObj["pv_energy_produced"] = dc.pv_energy_produced;
 
     // Create "inverter" object in the JSON structure
     JsonObject iObj = doc.createNestedObject("inverter");
-    iObj["read_interval_ms"] = dynamic_read_interval;
     iObj["valid_info"] = inverter.valid_info;
+    iObj["op_mode"] = inverter.op_mode;
+    iObj["soc"] = inverter.soc;
+    iObj["gas_gauge"] = inverter.gas_gauge;
+    iObj["battery_energy"] = inverter.battery_energy;
+    iObj["temp"] = inverter.temp;
+    iObj["read_interval_ms"] = dynamic_read_interval;
+    iObj["read_time"] = inverter.read_time;
+    iObj["read_time_mean"] = inverter.read_time_mean;
     iObj["charger"] = inverter.charger;
     iObj["charger_source_priority"] = inverter.charger_source_priority;
     iObj["eff_va"] = inverter.eff_va;
     iObj["eff_w"] = inverter.eff_w;
-    iObj["op_mode"] = inverter.op_mode;
     iObj["output_source_priority"] = inverter.output_source_priority;
-    iObj["soc"] = inverter.soc;
-    iObj["temp"] = inverter.temp;
-    iObj["read_time"] = inverter.read_time;
-    iObj["read_time_mean"] = inverter.read_time_mean;
-    iObj["gas_gauge"] = inverter.gas_gauge;
-    iObj["battery_energy"] = inverter.battery_energy;
     
     // Safety validation
     if (doc.overflowed()) {
