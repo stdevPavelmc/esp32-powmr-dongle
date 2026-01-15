@@ -22,10 +22,10 @@
       "unit": "%",
       "description": "Percentage of maximum load capacity currently being used"
     },
-    "output_va": {
-      "name": "Output Apparent Power",
-      "unit": "VA",
-      "description": "Total apparent power output in Volt-Amps"
+    "power_factor": {
+      "name": "AC power Factor",
+      "unit": "",
+      "description": "Ratio of the load that is resistive"
     },
     "output_voltage": {
       "name": "AC Output Voltage",
@@ -124,11 +124,6 @@
       "unit": "",
       "description": "Current state/status of the battery charging system"
     },
-    "charger_source_priority": {
-      "name": "Charger Source Priority",
-      "unit": "",
-      "description": "Priority order for charging sources (solar/grid/generator)"
-    },
     "eff_va": {
       "name": "Apparent Power Efficiency",
       "unit": "%",
@@ -143,11 +138,6 @@
       "name": "Operating Mode",
       "unit": "",
       "description": "Current operating mode of the inverter/charger system"
-    },
-    "output_source_priority": {
-      "name": "Output Source Priority",
-      "unit": "",
-      "description": "Priority order for output power sources (inverter/grid)"
     },
     "soc": {
       "name": "State of Charge",

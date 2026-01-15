@@ -10,8 +10,7 @@
 #include <ArduinoOTA.h>
 #include <FS.h>
 #include <SPIFFS.h>
-#include <ArduinoJson.h>          //https://github.com/bblanchon/ArduinoJson
-#include <SoftwareSerial.h>
+#include <ArduinoJson.h>
 #include <ModbusMaster.h>
 #include <SimpleTimer.h>          // Simple Task Time Manager
 #include <PubSubClient.h>
@@ -23,7 +22,8 @@
 /********* Configurable flags *************/
 #define WEBSERIAL 1
 #define VERBOSE_SERIAL 1
-#define VERSION  2.5
+#define MONITOR_SERIAL_SPEED 9600
+#define VERSION  3.0
 
 // Battery Gas Gauge Configuration
 const float MAXIMUM_ENERGY = 12.8*100*2;  // Wh
@@ -33,7 +33,6 @@ const float MAXIMUM_VOLTAGE = 28.8;   // V
 // Tracking variables
 unsigned long last_update_millis = 0;
 bool first_run = true;
-
 
 // rewrite prints
 #ifdef WEBSERIAL
@@ -83,9 +82,6 @@ bool wifi_mode = 0; // 0 = client | 1 = AP
 #define TXD2   GPIO_NUM_17  // TXD2
 #define RXD2   GPIO_NUM_16  // RXD2
 
-// define SoftWare Serial
-EspSoftwareSerial::UART SSerial;
-
 // Add these global variables near the top with other globals
 #define INITIAL_READ_INTERVAL 15000 // 15 seconds initial
 uint16_t dynamic_read_interval = INITIAL_READ_INTERVAL;
@@ -106,6 +102,7 @@ struct ACData {
   float output_va;
   float output_watts;
   float output_load_percent;
+  float power_factor;
 };
 
 ACData ac;
@@ -144,24 +141,22 @@ struct InverterData {
     5:
   */
   uint16_t op_mode;
-  /* Charger status
-    0: Off
-    1: Idle
-    2: Active
+  /* Mapping
+    0: b0000: ?
+    1: b0001: ? AC cargando ?
+    2: b0010: ?
+    3: b0011: Descargando
+    4: b0100: AC cargando
   */
   uint16_t charger;
-  /* FAKE Output source priority
-    0: Battery
-    1: AC
-    2: Solar
+  /* Mapping in progress
+    10: b1010: Descargando desde Batería, no AC, no PV _chargers_off_?
+    11: b1011: AC off, PV on (charging from PV) charge in progress _MPPT_ACTIVE ?
+    12: b1100: _MPPT_and_AC_ACTIVE_ ?
+      AC on, PV on (charging form both) charge in progress
+      AC on, PV off (charging form AC) charge in progress
+    13: b1101: AC on, PV on, completed charge, load from PV, _charger IDLE_ ?
   */
-  uint16_t output_source_priority;
-  /* FAKE charger source priority
-    0: Battery
-    1: Solar
-    2: AC 
-  */
-  uint16_t charger_source_priority;
   float eff_va = 0;
   float eff_w = 0;
   float soc = 0;    // 0-100% per voltage range
@@ -170,6 +165,11 @@ struct InverterData {
   unsigned int read_time_mean = 0;
   float battery_energy = 0.0;  // Wh
   float gas_gauge = 0.0;       // 0-100%
+  float energy_spent_ac = 0.0; // Wh - Total AC output energy
+  // Energy source percentages for AC output
+  float energy_source_ac = 0.0;   // % from AC grid
+  float energy_source_batt = 0.0; // % from battery
+  float energy_source_pv = 0.0;   // % from PV solar
 };
 
 InverterData inverter;
@@ -650,6 +650,20 @@ void send_request() {
     publish("/powmr/ac.output_watts", ac.output_watts);
   #endif
 
+  // power_factor calculated
+  if (ac.output_watts > 0 & ac.output_va > 0) {
+    ac.power_factor = (ac.output_watts / ac.output_va);
+  } else {
+    ac.power_factor = 1;
+  }
+  #ifdef VERBOSE_SERIAL
+    sprint("ac.power_factor: ");
+    sprintln(ac.power_factor);
+  #endif
+  #ifdef PUBSUB
+    publish("/powmr/ac.power_factor", ac.power_factor);
+  #endif
+
   ac.output_load_percent = (float)htons(mbus_data[13]);  // 4514
   #ifdef VERBOSE_SERIAL
     sprint("ac.output_load_percent: ");
@@ -659,23 +673,23 @@ void send_request() {
     publish("/powmr/ac.output_load_percent", ac.output_load_percent);
   #endif
 
-  inverter.charger_source_priority = (float)htons(mbus_data[35]);  // 4536
-  #ifdef VERBOSE_SERIAL
-    sprint("inverter.charger_source_priority: ");
-    sprintln(inverter.charger_source_priority);
-  #endif
-  #ifdef PUBSUB
-    publish("/powmr/inverter.charger_source_priority", inverter.charger_source_priority);
-  #endif
+  // inverter.charger_source_priority = (float)htons(mbus_data[35]);  // 4536
+  // #ifdef VERBOSE_SERIAL
+  //   sprint("inverter.charger_source_priority: ");
+  //   sprintln(inverter.charger_source_priority);
+  // #endif
+  // #ifdef PUBSUB
+  //   publish("/powmr/inverter.charger_source_priority", inverter.charger_source_priority);
+  // #endif
 
-  inverter.output_source_priority = (float)htons(mbus_data[36]);  // 4537
-  #ifdef VERBOSE_SERIAL
-    sprint("inverter.output_source_priority: ");
-    sprintln(inverter.output_source_priority);
-  #endif
-  #ifdef PUBSUB
-    publish("/powmr/inverter.output_source_priority", inverter.output_source_priority);
-  #endif
+  // inverter.output_source_priority = (float)htons(mbus_data[36]);  // 4537
+  // #ifdef VERBOSE_SERIAL
+  //   sprint("inverter.output_source_priority: ");
+  //   sprintln(inverter.output_source_priority);
+  // #endif
+  // #ifdef PUBSUB
+  //   publish("/powmr/inverter.output_source_priority", inverter.output_source_priority);
+  // #endif
 
   inverter.charger = (float)htons(mbus_data[54]);  // 4555
   #ifdef VERBOSE_SERIAL
@@ -880,7 +894,7 @@ String data_JSON() {
     acObj["output_voltage"] = ac.output_voltage;
     acObj["output_freq"] = ac.output_freq;
     acObj["output_load_percent"] = ac.output_load_percent;
-    acObj["output_va"] = ac.output_va;
+    acObj["power_factor"] = ac.power_factor;
     acObj["output_watts"] = ac.output_watts;
 
     // Create "dc" object in the JSON structure
@@ -913,10 +927,10 @@ String data_JSON() {
     iObj["read_time"] = inverter.read_time;
     iObj["read_time_mean"] = inverter.read_time_mean;
     iObj["charger"] = inverter.charger;
-    iObj["charger_source_priority"] = inverter.charger_source_priority;
+    // iObj["charger_source_priority"] = inverter.charger_source_priority;
     iObj["eff_va"] = inverter.eff_va;
     iObj["eff_w"] = inverter.eff_w;
-    iObj["output_source_priority"] = inverter.output_source_priority;
+    // iObj["output_source_priority"] = inverter.output_source_priority;
     
     // Safety validation
     if (doc.overflowed()) {
@@ -1146,8 +1160,18 @@ void idle() {
 }
 
 void node_setup() {
+  // Initialize serial based on configuration
+  Serial1.begin(2400, SERIAL_8N1, RXD2, TXD2);
+  sprintln("Using Hardware Serial1");
+  
+  if (Serial1) {
+    sprintln("Serial 1 init ok");
+  } else {
+    sprintln("Serial 1 init problem !!!");
+  }
+
   // communicate with Modbus slave ID 5 over Serial
-  node.begin(5, SSerial);
+  node.begin(5, Serial1);
   node.idle(idle);
   // private method
   //node.ku16MBResponseTimeout = 20; // ms of response timeout
@@ -1158,7 +1182,7 @@ void node_setup() {
 
 void setup() {
   // normal serial via USB and gpios txd0/rxd0
-  Serial.begin (115200);
+  Serial.begin (MONITOR_SERIAL_SPEED);
 
   // Wifi connect, client and start server if not client
   do_wifi();
@@ -1192,14 +1216,6 @@ void setup() {
   // Set up mDNS responder:
   mDNS_setup();
   
-  // PowMr software serial
-  SSerial.begin(2400, SWSERIAL_8N1, RXD2, TXD2, false);
-  if (SSerial) {
-    sprintln("SSerial init ok");
-  } else {
-    sprintln("SSerial init problem !!!");
-  }
-
   // notice to the user
   sprint("Firmware version: ");
   sprintln(VERSION);
