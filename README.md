@@ -8,7 +8,6 @@ Based on the work of [Leo Designer](https://github.com/leodesigner/powmr_comm)
 
 This code will do:
 - Connect to your WiFi network (see [WiFi](#wifi) section)
-- Connect to a influxdb cloud instance with influxdb v2.x protocol (see [InfluxDB](#influxdb) section. disbled by default)
 - Make available a `/api/status` json endpoint in json format to consume and use on the index.html page (see [Json](#json) sections)
 - A http webserver (sample image on the top of this document) that can be called using hostname.local (see WiFi configuration for details on hostname)
 
@@ -34,26 +33,6 @@ const char *hostname = "ESP32-PowMr";
 You can see there is a server section, that is a hostpot, if the configured network is not available or got down it will start the hostspot with this credentials, and if the network came back it will re-connect to it, ditching the hostpot.
 
 The default IP on hostpot mode is "192.168.4.1" and there it will register a mDNS http server as 'hostname'.local, aka: `ESP32-PowMr.local` by default.
-
-## InfluxDB
-
-You need to create a file with this content (adjust to your credentials on src/mqtt.h):
-
-```cpp
-/****** MTWW server config *******************/
-// Server settings
-const char* mqtt_server = "192.168.1.102";
-const int mqtt_server_port = 1883;
-
-// MQTT topics
-// const char* publishTopic = "mtww";
-char* subscribeTopic = "/dummy";
-
-```
-
-This assumes a local mqtt server with no auth; the "/dummy/" topic is that, a dummy one to send messages and test the pub-sub features.
-
-You can disable the mqtt for good if you will don't use it by commenting the PUBSUB define on top of the main.cpp file, but you need to define the src/mqtt.h file of comment the #include statement for it.
 
 # Json
 
