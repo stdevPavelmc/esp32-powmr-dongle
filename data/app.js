@@ -35,9 +35,13 @@ async function fetchStatus() {
 }
 
 function formatValue(val) {
-    if (val === null || val === undefined || isNaN(val)) return '--';
-    if (Number.isInteger(val)) return val;
-    return parseFloat(val).toFixed(1);
+    if (val === null || val === undefined || isNaN(val))
+        return '-';
+    if (Number.isInteger(val) || typeof val === 'number' && val % 1 !== 0)
+        return parseFloat(val).toFixed(1);
+    
+    // final resort, return the value
+    return val;
 }
 
 function createCard(key, value, sectionKey) {

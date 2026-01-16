@@ -32,6 +32,11 @@
       "unit": "V",
       "description": "Voltage level of the inverter's AC output"
     },
+    "output_va": {
+      "name": "Output Apparent Power",
+      "unit": "VA",
+      "description": "Apparent power output in volt-amperes"
+    },
     "output_watts": {
       "name": "Output Real Power",
       "unit": "W",
@@ -168,6 +173,26 @@
       "name": "Battery Energy Content",
       "unit": "Wh",
       "description": "Estimated energy stored in the battery bank"
+    },
+    "energy_spent_ac": {
+      "name": "AC Energy Consumed",
+      "unit": "Wh",
+      "description": "Cumulative energy consumed from AC output"
+    },
+    "energy_source_ac": {
+      "name": "AC Source Percentage",
+      "unit": "%",
+      "description": "Percentage of output power sourced from AC input"
+    },
+    "energy_source_batt": {
+      "name": "Battery Source Percentage",
+      "unit": "%",
+      "description": "Percentage of output power sourced from battery"
+    },
+    "energy_source_pv": {
+      "name": "Solar Source Percentage",
+      "unit": "%",
+      "description": "Percentage of output power sourced from solar panels"
     }
   }
 }
