@@ -33,7 +33,12 @@ class DataBridge:
 
         # Track current values: {measurement.field: value}
         self.current_values = {}
+        # Track last write time: {measurement.field: timestamp}
+        self.last_write_time = {}
         self.initialized = False
+        
+        # Heartbeat interval (60 seconds)
+        self.heartbeat_interval = 60
 
         # Get source type from config
         self.source_type = self.config.get('source', 'type', fallback='mqtt')
@@ -49,6 +54,10 @@ class DataBridge:
             sys.exit(1)
 
         self.logging = True
+        
+        # Start heartbeat thread
+        self.heartbeat_thread = Thread(target=self._heartbeat_loop, daemon=True)
+        self.heartbeat_thread.start()
 
     def _setup_influxdb(self):
         """Initialize InfluxDB client"""
@@ -249,13 +258,43 @@ class DataBridge:
         if should_write:
             self._write_to_influx(measurement, field, value)
 
-    def _write_to_influx(self, measurement, field, value):
+    def _heartbeat_loop(self):
+        """Periodically write unchanged values to maintain data continuity"""
+        logger.info(f"Heartbeat thread started (interval: {self.heartbeat_interval}s)")
+        
+        while not self.stop_event.is_set():
+            self.stop_event.wait(self.heartbeat_interval)
+            
+            if self.stop_event.is_set():
+                break
+                
+            if not self.initialized:
+                continue
+            
+            now = time.time()
+            
+            # Write all current values that haven't been written recently
+            for key, value in list(self.current_values.items()):
+                last_write = self.last_write_time.get(key, 0)
+                
+                # If more than heartbeat_interval has passed, write the value
+                if now - last_write >= self.heartbeat_interval:
+                    measurement, field = key.split('.', 1)
+                    self._write_to_influx(measurement, field, value, is_heartbeat=True)
+
+    def _write_to_influx(self, measurement, field, value, is_heartbeat=False):
         """Write data point to InfluxDB"""
         try:
+            key = f"{measurement}.{field}"
             point = Point(measurement).field(field, value).time(datetime.utcnow())
             self.write_api.write(bucket=self.bucket, org=self.org, record=point)
+            
+            # Update last write time
+            self.last_write_time[key] = time.time()
+            
             if self.logging:
-                logger.info(f"Written to InfluxDB: {measurement}.{field} = {value}")
+                log_type = "Heartbeat" if is_heartbeat else "Written"
+                logger.info(f"{log_type} to InfluxDB: {measurement}.{field} = {value}")
         except Exception as e:
             logger.error(f"Failed to write to InfluxDB: {e}")
 
