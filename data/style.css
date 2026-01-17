@@ -4,6 +4,17 @@
     box-sizing: border-box;
 }
 
+:root {
+    --color-0: #4CAF50; /* Green */
+    --color-1: #2196F3; /* Blue */
+    --color-2: #FF9800; /* Orange */
+    --color-3: #E91E63; /* Pink */
+    --color-4: #9C27B0; /* Purple */
+    --color-5: #00BCD4; /* Cyan */
+    --color-6: #FFEB3B; /* Yellow */
+    --color-7: #F44336; /* Red */
+}
+
 body {
     font-family: Arial, sans-serif;
     background: #1a1a1a;
@@ -83,6 +94,71 @@ h1 {
 .card-unit {
     font-size: 0.9em;
     color: #888;
+}
+
+/* Panel color variations */
+.panel-color-0 .panel-header,
+.panel-color-0 .card-value {
+    color: var(--color-0);
+}
+.panel-color-0 .card {
+    border-left-color: var(--color-0);
+}
+
+.panel-color-1 .panel-header,
+.panel-color-1 .card-value {
+    color: var(--color-1);
+}
+.panel-color-1 .card {
+    border-left-color: var(--color-1);
+}
+
+.panel-color-2 .panel-header,
+.panel-color-2 .card-value {
+    color: var(--color-2);
+}
+.panel-color-2 .card {
+    border-left-color: var(--color-2);
+}
+
+.panel-color-3 .panel-header,
+.panel-color-3 .card-value {
+    color: var(--color-3);
+}
+.panel-color-3 .card {
+    border-left-color: var(--color-3);
+}
+
+.panel-color-4 .panel-header,
+.panel-color-4 .card-value {
+    color: var(--color-4);
+}
+.panel-color-4 .card {
+    border-left-color: var(--color-4);
+}
+
+.panel-color-5 .panel-header,
+.panel-color-5 .card-value {
+    color: var(--color-5);
+}
+.panel-color-5 .card {
+    border-left-color: var(--color-5);
+}
+
+.panel-color-6 .panel-header,
+.panel-color-6 .card-value {
+    color: var(--color-6);
+}
+.panel-color-6 .card {
+    border-left-color: var(--color-6);
+}
+
+.panel-color-7 .panel-header,
+.panel-color-7 .card-value {
+    color: var(--color-7);
+}
+.panel-color-7 .card {
+    border-left-color: var(--color-7);
 }
 
 .footer {

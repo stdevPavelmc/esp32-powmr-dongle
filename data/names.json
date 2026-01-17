@@ -129,11 +129,6 @@
       "unit": "",
       "description": "Current state/status of the battery charging system"
     },
-    "eff_va": {
-      "name": "Apparent Power Efficiency",
-      "unit": "%",
-      "description": "Efficiency calculation based on apparent power"
-    },
     "eff_w": {
       "name": "Real Power Efficiency",
       "unit": "%",

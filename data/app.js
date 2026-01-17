@@ -35,8 +35,9 @@ async function fetchStatus() {
 }
 
 function formatValue(val) {
-    if (val === null || val === undefined || isNaN(val))
+    if (val === null || val === undefined)
         return '-';
+        
     if (Number.isInteger(val) || typeof val === 'number' && val % 1 !== 0)
         return parseFloat(val).toFixed(1);
     
@@ -75,39 +76,41 @@ function createCard(key, value, sectionKey) {
     return card;
 }
 
-function createPanel(sectionKey, sectionData) {
+function createPanel(sectionKey, sectionData, colorIndex) {
     const panel = document.createElement('div');
-    panel.className = 'panel';
-    
+    panel.className = `panel panel-color-${colorIndex % 8}`;
+
     const meta = namesData[sectionKey] || {};
     const name = meta.name || sectionKey.toUpperCase();
     const desc = meta.description || '';
-    
+
     const header = document.createElement('div');
     header.className = 'panel-header';
     header.textContent = name;
     if (desc) header.title = desc;
-    
+
     const cards = document.createElement('div');
     cards.className = 'panel-cards';
-    
+
     Object.keys(sectionData).forEach(key => {
         cards.appendChild(createCard(key, sectionData[key], sectionKey));
     });
-    
+
     panel.appendChild(header);
     panel.appendChild(cards);
-    
+
     return panel;
 }
 
 function renderDashboard(data) {
     const dashboard = document.getElementById('dashboard');
     dashboard.innerHTML = '';
-    
+
+    let colorIndex = 0;
     Object.keys(data).forEach(section => {
         if (typeof data[section] === 'object' && data[section] !== null) {
-            dashboard.appendChild(createPanel(section, data[section]));
+            dashboard.appendChild(createPanel(section, data[section], colorIndex));
+            colorIndex++;
         }
     });
 }

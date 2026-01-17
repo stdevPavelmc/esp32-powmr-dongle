@@ -13,6 +13,7 @@
 #include <ArduinoJson.h>
 #include <ModbusMaster.h>
 #include <SimpleTimer.h>
+#include <Preferences.h>
 
 // local config on files
 #include "wifi.h"
@@ -22,6 +23,12 @@
 #define VERBOSE_SERIAL 1
 #define MONITOR_SERIAL_SPEED 9600
 #define VERSION  3.0
+
+// Preferences save thresholds
+#define SAVE_THRESHOLD_PV 0.05      // 50 Wh
+#define SAVE_THRESHOLD_BATT 1.0     // 1 Wh
+#define SAVE_THRESHOLD_GG 1.0       // 1%
+#define SAVE_THRESHOLD_AC 0.05      // 50 Wh
 
 // Battery Gas Gauge Configuration
 const float MAXIMUM_ENERGY = 12.8*100*2;  // Wh
@@ -43,6 +50,9 @@ bool first_run = true;
 
 // simple timer
 SimpleTimer timer;
+
+// preferences for persistent storage
+Preferences prefs;
 
 // modbus data
 ModbusMaster node;
@@ -141,7 +151,6 @@ struct InverterData {
       AC on, PV off (charging form AC) charge in progress
     13: b1101: AC on, PV on, completed charge, load from PV, _charger IDLE_ ?
   */
-  float eff_va = 0;
   float eff_w = 0;
   float soc = 0;    // 0-100% per voltage range
   byte valid_info = 0;
@@ -156,6 +165,21 @@ struct InverterData {
 };
 
 InverterData inverter;
+
+String uptime() {
+  unsigned long uptime_sec = millis() / 1000;
+  unsigned long days = uptime_sec / (60 * 60 * 24);
+  unsigned long hours = (uptime_sec % (60 * 60 * 24)) / (60 * 60);
+  unsigned long minutes = (uptime_sec % (60 * 60)) / 60;
+  
+  String uptime_str;
+  if (days > 0) {
+    uptime_str = String(days) + "d:" + String(hours) + "h:" + String(minutes) + "m";
+  } else {
+    uptime_str = String(hours) + "h:" + String(minutes) + "m";
+  }
+  return uptime_str;
+}
 
 // dynamic readding interval
 uint16_t calculate_next_interval() {
@@ -286,6 +310,108 @@ void updatePVEnergy(float pv_voltage, float pv_current, float pv_power) {
   
   float power_to_use = (pv_power > 0.0) ? pv_power : (pv_voltage * pv_current);
   updateEnergy(dc.pv_energy_produced, power_to_use, last_pv_millis, first_pv_call);
+}
+
+// Load energy data from Preferences
+void loadEnergyData() {
+  prefs.begin("energy_data", true); // true = read-only
+
+  if (prefs.isKey("pv_energy")) {
+    // Keys exist, load saved values
+    dc.pv_energy_produced = prefs.getFloat("pv_energy", 0.0);
+    inverter.battery_energy = prefs.getFloat("batt_energy", 0.0);
+    inverter.gas_gauge = prefs.getFloat("gas_gauge", 0.0);
+    inverter.energy_spent_ac = prefs.getFloat("ac_energy", 0.0);
+
+    sprintln("Loaded energy data from Preferences:");
+    sprint("  PV energy: ");
+    sprintln(dc.pv_energy_produced);
+    sprint("  Battery energy: ");
+    sprintln(inverter.battery_energy);
+    sprint("  Gas gauge: ");
+    sprintln(inverter.gas_gauge);
+    sprint("  AC energy spent: ");
+    sprintln(inverter.energy_spent_ac);
+  } else {
+    // First boot - initialize with intelligent defaults
+    dc.pv_energy_produced = 0.0;
+    inverter.energy_spent_ac = 0.0;
+
+    // Estimate battery energy from current voltage
+    if (dc.voltage_corrected >= MINIMUM_VOLTAGE && dc.voltage_corrected <= MAXIMUM_VOLTAGE) {
+      float soc = 100.0 * (dc.voltage_corrected - BATT_MIN_VOLTAGE) / (BATT_MAX_VOLTAGE - BATT_MIN_VOLTAGE);
+      soc = constrain(soc, 0, 100);
+      inverter.gas_gauge = soc;
+      inverter.battery_energy = (soc * MAXIMUM_ENERGY) / 100.0;
+    } else {
+      inverter.gas_gauge = 0.0;
+      inverter.battery_energy = 0.0;
+    }
+
+    sprintln("First boot - Initialized energy data with defaults:");
+    sprint("  Battery energy (from voltage): ");
+    sprintln(inverter.battery_energy);
+    sprint("  Gas gauge: ");
+    sprintln(inverter.gas_gauge);
+  }
+
+  prefs.end();
+}
+
+// Save energy data to Preferences when thresholds exceeded
+void saveEnergyData(bool force=false) {
+  static float last_pv = 0.0;
+  static float last_batt = 0.0;
+  static float last_gg = 0.0;
+  static float last_ac = 0.0;
+  static bool first_call = true;
+
+  // On first call, just save the current values as baseline
+  if (first_call) {
+    last_pv = dc.pv_energy_produced;
+    last_batt = inverter.battery_energy;
+    last_gg = inverter.gas_gauge;
+    last_ac = inverter.energy_spent_ac;
+    first_call = false;
+    return;
+  }
+
+  // Check if any threshold is exceeded
+  bool should_save = false;
+
+  if (abs(dc.pv_energy_produced - last_pv) >= SAVE_THRESHOLD_PV) {
+    should_save = true;
+  }
+  if (abs(inverter.battery_energy - last_batt) >= SAVE_THRESHOLD_BATT) {
+    should_save = true;
+  }
+  if (abs(inverter.gas_gauge - last_gg) >= SAVE_THRESHOLD_GG) {
+    should_save = true;
+  }
+  if (abs(inverter.energy_spent_ac - last_ac) >= SAVE_THRESHOLD_AC) {
+    should_save = true;
+  }
+
+  if (should_save or force) {
+    prefs.begin("energy_data", false); // false = read-write
+
+    prefs.putFloat("pv_energy", dc.pv_energy_produced);
+    prefs.putFloat("batt_energy", inverter.battery_energy);
+    prefs.putFloat("gas_gauge", inverter.gas_gauge);
+    prefs.putFloat("ac_energy", inverter.energy_spent_ac);
+
+    prefs.end();
+
+    // Update last saved values
+    last_pv = dc.pv_energy_produced;
+    last_batt = inverter.battery_energy;
+    last_gg = inverter.gas_gauge;
+    last_ac = inverter.energy_spent_ac;
+
+    #ifdef VERBOSE_SERIAL
+      sprintln("Energy data saved to Preferences");
+    #endif
+  }
 }
 
 // Read registers in chunks with retry logic
@@ -579,14 +705,6 @@ void send_request() {
 
   float input_power = dc.pv_power + dc.discharge_power;
   if (input_power > 0) {
-    inverter.eff_va = (100.0 * ac.output_va) / input_power;
-  }
-  #ifdef VERBOSE_SERIAL
-    sprint("inverter.eff_va: ");
-    sprintln(inverter.eff_va);
-  #endif
-
-  if (input_power > 0) {
     inverter.eff_w = (100.0 * ac.output_watts) / input_power;
   }
   #ifdef VERBOSE_SERIAL
@@ -628,6 +746,13 @@ void send_request() {
     sprint("inverter.energy_spent_ac: ");
     sprintln(inverter.energy_spent_ac);
   #endif
+
+  // Load energy data from Preferences on first successful read
+  static bool energy_data_loaded = false;
+  if (!energy_data_loaded) {
+    loadEnergyData();
+    energy_data_loaded = true;
+  }
 
   // Calculate energy source percentages
   inverter.energy_source_ac = 0.0;
@@ -693,39 +818,48 @@ void send_request() {
     sprint("inverter.energy_source_pv: ");
     sprintln(inverter.energy_source_pv);
   #endif
+
+  // Save energy data if thresholds exceeded
+  saveEnergyData();
 }
 
 // OTA settings and mDSN
 void OTA_setup() {
   ArduinoOTA
-      .onStart([]()
-       {
-      String type;
-      if (ArduinoOTA.getCommand() == U_FLASH) {
-        type = "sketch";
-      } else {
-        type = "filesystem";
-      }
+      .onStart([]() {
+        // Force save energy data before OTA update
+        saveEnergyData(true);
+        Serial.println("Energy data force saved before OTA update");
 
-      Serial.println("Start updating " + type); })
-      .onEnd([]()
-     { Serial.println("\nEnd"); })
-      .onProgress([](unsigned int progress, unsigned int total)
-          { Serial.printf("Progress: %u%%\r", (progress / (total / 100))); })
-      .onError([](ota_error_t error)
-       {
-      Serial.printf("Error[%u]: ", error);
-      if (error == OTA_AUTH_ERROR) {
-        Serial.println("Auth Failed");
-      } else if (error == OTA_BEGIN_ERROR) {
-        Serial.println("Begin Failed");
-      } else if (error == OTA_CONNECT_ERROR) {
-        Serial.println("Connect Failed");
-      } else if (error == OTA_RECEIVE_ERROR) {
-        Serial.println("Receive Failed");
-      } else if (error == OTA_END_ERROR) {
-        Serial.println("End Failed");
-      } });
+        String type;
+        if (ArduinoOTA.getCommand() == U_FLASH) {
+          type = "sketch";
+        } else {
+          type = "filesystem";
+        }
+
+        Serial.println("Start updating " + type);
+      })
+      .onEnd([]() {
+        Serial.println("\nEnd");
+      })
+      .onProgress([](unsigned int progress, unsigned int total) {
+        Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+      })
+      .onError([](ota_error_t error) {
+        Serial.printf("Error[%u]: ", error);
+        if (error == OTA_AUTH_ERROR) {
+          Serial.println("Auth Failed");
+        } else if (error == OTA_BEGIN_ERROR) {
+          Serial.println("Begin Failed");
+        } else if (error == OTA_CONNECT_ERROR) {
+          Serial.println("Connect Failed");
+        } else if (error == OTA_RECEIVE_ERROR) {
+          Serial.println("Receive Failed");
+        } else if (error == OTA_END_ERROR) {
+          Serial.println("End Failed");
+        }
+      });
 
   ArduinoOTA.setPort(3232);
   ArduinoOTA.setHostname(hostname);
@@ -785,14 +919,15 @@ String data_JSON() {
     iObj["read_time_mean"] = inverter.read_time_mean;
     iObj["charger"] = inverter.charger;
     // iObj["charger_source_priority"] = inverter.charger_source_priority;
-    iObj["eff_va"] = inverter.eff_va;
     iObj["eff_w"] = inverter.eff_w;
     // iObj["output_source_priority"] = inverter.output_source_priority;
     iObj["energy_spent_ac"] = inverter.energy_spent_ac;
     iObj["energy_source_ac"] = inverter.energy_source_ac;
     iObj["energy_source_batt"] = inverter.energy_source_batt;
     iObj["energy_source_pv"] = inverter.energy_source_pv;
-    
+    iObj["json_size"] = doc.memoryUsage();
+    iObj["uptime"] = uptime();
+
     if (doc.overflowed()) {
         sprintln("ERROR - Json overflowed");
         sprint("Doc Usage: ");
