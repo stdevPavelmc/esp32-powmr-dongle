@@ -10,7 +10,7 @@ This code will do:
 - Connect to your WiFi network (see [WiFi](#wifi) section)
 - Make available a `/api/status` json endpoint in json format to consume and use on the index.html page (see [Json](#json) sections)
 - A http webserver (sample image on the top of this document) that can be called using hostname.local (see WiFi configuration for details on hostname)
-- There is a extra bidge app in python `mqtt_json_2_influx.py` file to run as a service on a linux machine to conecct either to the mqtt server or directly to the ESP32 web and retrieve the json file and push the data to a influxdb server.
+- There is a extra bidge app in python `mqtt_json_2_influx.py` file to run as a service on a linux machine to conecct either to the mqtt server or directly to the ESP32 web and retrieve the json file and push the data to a influxdb server (see [Python Bridge](#python_bridge) section below)
 
 ## WiFi
 
@@ -81,4 +81,98 @@ The `/api/status` will produce a json like this:
 Please notice the `inverter.valid_info` variable, the data is actual and valis only if this parameter is `1`; and the `inverter.read_interval_ms` variable tha reflects the time between measuremenst (it's a #define on the file, read takes between 6-12 seconds with retries)
 
 WARNING: This json data will change as this is a work in progress...
+
+# Python Bridge
+
+The `mqtt_json_2_influx.py` script serves as a data bridge between the ESP32 inverter monitor and an InfluxDB time-series database. Its primary goal is to collect inverter telemetry data and store it for long-term analysis, monitoring, and visualization.
+
+## Goal
+
+The Python bridge provides:
+- **Data Collection**: Retrieves inverter data either via MQTT messages or direct HTTP polling from the ESP32
+- **Data Processing**: Validates data integrity and performs change detection to avoid unnecessary writes
+- **InfluxDB Integration**: Stores processed data in InfluxDB with proper measurement/field structure
+- **Heartbeat Mechanism**: Maintains data continuity by periodically sending unchanged values
+- **Energy Tracking**: Calculates and tracks battery energy levels, PV production, and AC consumption
+
+## Configuration
+
+The script uses an INI configuration file (default: `/etc/mqtt_influx_bridge/config.ini`) with the following sections:
+
+### Source Configuration
+```ini
+[source]
+type = mqtt  # or 'http'
+```
+
+### MQTT Configuration (when type = mqtt)
+```ini
+[mqtt]
+host = 192.168.1.100
+port = 1883
+username = your_mqtt_username
+password = your_mqtt_password
+client_id = mqtt_influx_bridge
+
+# MQTT topics to subscribe to (supports wildcards)
+topics = powmr/inverter/#
+```
+
+### HTTP Configuration (when type = http)
+```ini
+[http]
+url = http://192.168.1.101/api/status
+poll_interval = 15  # seconds between polls
+```
+
+### InfluxDB Configuration
+```ini
+[influxdb]
+url = http://localhost:8086
+token = your_influxdb_token
+org = your_organization
+bucket = powmr_data
+
+# Optional cloud InfluxDB for backup (failures are logged but don't stop operation)
+[influxdb_cloud]
+url = https://us-west-2-1.aws.cloud2.influxdata.com
+token = your_cloud_token
+org = your_cloud_org
+bucket = powmr_cloud_backup
+```
+
+## Features
+
+- **Dual Input Sources**: Supports both MQTT subscriptions and HTTP polling
+- **Dual InfluxDB Servers**: Primary local server + optional cloud backup server
+- **Cloud Synchronization**: Automatically syncs missing data to cloud every 30 minutes
+- **Change Detection**: Only writes to InfluxDB when values actually change (except for heartbeat)
+- **Zero Value Handling**: Zero values are sent only once, not repeatedly during heartbeat
+- **Data Validation**: Ensures data freshness by only heartbeating values read within the last 2 minutes
+- **Energy Persistence**: Saves energy calculations to ESP32 preferences for continuity across restarts
+- **Robust Error Handling**: Continues operation even when cloud writes fail
+- **Configurable Heartbeat**: Adjustable intervals for data continuity maintenance
+
+## Usage
+
+Run the bridge as a service:
+
+```bash
+# Using default config location
+python mqtt_json_2_influx.py
+
+# Using custom config file
+python mqtt_json_2_influx.py --config /path/to/your/config.ini
+```
+
+## Data Structure
+
+The script creates the following InfluxDB measurements:
+- `inverter`: Core inverter status (temperature, mode, efficiency, etc.)
+- `ac`: AC input/output parameters (voltage, frequency, power)
+- `dc`: DC parameters (battery voltage, PV power, charge/discharge currents)
+- Additional measurements for energy tracking and battery state
+
+All data includes proper timestamps and follows InfluxDB best practices for time-series data.
+
 

@@ -2,3 +2,5 @@
 .vscode
 lib/
 src/wifi.h
+__pycache__
+*/__pycache__

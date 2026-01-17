@@ -36,8 +36,8 @@ const float MINIMUM_VOLTAGE = 22.0;   // V
 const float MAXIMUM_VOLTAGE = 28.8;   // V
 
 // Tracking variables
-unsigned long last_update_millis = 0;
-bool first_run = true;
+unsigned long lastUpdateMillis = 0;
+bool firstRun = true;
 
 // rewrite prints
 #ifdef WEBSERIAL
@@ -60,17 +60,17 @@ ModbusMaster node;
 #define CHUNK_SIZE 3
 #define RETRY_COUNT 4
 #define CHUNK_DELAY_US 10
-uint16_t mbus_data[MBUS_REGISTERS + 1]; // allow for room
+uint16_t mbusData[MBUS_REGISTERS + 1]; // allow for room
 
 // webserver related
 AsyncWebServer server(80);
-IPAddress myIP;
+IPAddress myIp;
 
 // SPIFFS
 #define FORMAT_SPIFFS_IF_FAILED true
 
 // Wifi status
-bool wifi_mode = 0; // 0 = client | 1 = AP
+bool wifiMode = 0; // 0 = client | 1 = AP
 
 // define serial connection got SSerial
 #define TXD2   GPIO_NUM_17  // TXD2
@@ -181,7 +181,7 @@ String uptime() {
   return uptime_str;
 }
 
-// dynamic readding interval
+// dynamic reading interval
 uint16_t calculateNextInterval() {
   if (inverter.read_time_mean == 0) {
     return INITIAL_READ_INTERVAL;
@@ -205,36 +205,36 @@ uint16_t calculateNextInterval() {
 }
 
 // Generic energy accumulation function
-void updateEnergy(float &energy, float power, unsigned long &last_millis, bool &first_call) {
-  unsigned long current_millis = millis();
-  unsigned long delta_millis;
-  
-  if (current_millis < last_millis) {
-    delta_millis = (0xFFFFFFFF - last_millis) + current_millis + 1;
+void updateEnergy(float &energy, float power, unsigned long &lastMillis, bool &firstCall) {
+  unsigned long currentMillis = millis();
+  unsigned long deltaMillis;
+
+  if (currentMillis < lastMillis) {
+    deltaMillis = (0xFFFFFFFF - lastMillis) + currentMillis + 1;
   } else {
-    delta_millis = current_millis - last_millis;
+    deltaMillis = currentMillis - lastMillis;
   }
-  
-  if (first_call) {
-    first_call = false;
-    last_millis = current_millis;
+
+  if (firstCall) {
+    firstCall = false;
+    lastMillis = currentMillis;
     return;
   }
-  
-  float delta_hours = delta_millis / 3600000.0;
-  float energy_delta = power * delta_hours;
-  energy += energy_delta;
-  
+
+  float deltaHours = deltaMillis / 3600000.0;
+  float energyDelta = power * deltaHours;
+  energy += energyDelta;
+
   if (energy < 0.0) {
     energy = 0.0;
   }
-  
-  last_millis = current_millis;
+
+  lastMillis = currentMillis;
 }
 
-void updateBatteryEnergy(float voltage, float charge_current, float discharge_current) {
-  static bool first_run = 1;
-  static unsigned long last_update_millis = 0;
+void updateBatteryEnergy(float voltage, float chargeCurrent, float dischargeCurrent) {
+  static bool firstRun = 1;
+  static unsigned long lastUpdateMillis = 0;
   
   if (voltage <= MINIMUM_VOLTAGE) {
     inverter.battery_energy = 0.0;
@@ -242,16 +242,16 @@ void updateBatteryEnergy(float voltage, float charge_current, float discharge_cu
     sprintln("Battery depleted - Reset to 0%");
     return;
   }
-  
+
   if (voltage >= MAXIMUM_VOLTAGE) {
     inverter.battery_energy = MAXIMUM_ENERGY;
     inverter.gas_gauge = 100.0;
     sprintln("Battery full - Reset to 100%");
     return;
   }
-  
-  float net_current = charge_current - discharge_current;
-  updateEnergy(inverter.battery_energy, (voltage * net_current), last_update_millis, first_run);
+
+  float netCurrent = chargeCurrent - dischargeCurrent;
+  updateEnergy(inverter.battery_energy, (voltage * netCurrent), lastUpdateMillis, firstRun);
   
   // if (inverter.battery_energy < 0.0) {
   //   inverter.battery_energy = 0.0;
@@ -269,47 +269,47 @@ void updateBatteryEnergy(float voltage, float charge_current, float discharge_cu
 }
 
 // pv energy produced
-void updatePVEnergy(float pv_voltage, float pv_current, float pv_power) {
-  static unsigned long last_pv_millis = 0;
-  static bool first_pv_call = true;
-  static unsigned long night_start_millis = 0;
-  static bool is_night = false;
-  static bool night_reset_done = false;
+void updatePVEnergy(float pvVoltage, float pvCurrent, float pvPower) {
+  static unsigned long lastPvMillis = 0;
+  static bool firstPvCall = true;
+  static unsigned long nightStartMillis = 0;
+  static bool isNight = false;
+  static bool nightResetDone = false;
+
+  unsigned long currentMillis = millis();
   
-  unsigned long current_millis = millis();
-  
-  if (pv_voltage <= 30) {
-    if (!is_night) {
-      is_night = true;
-      night_start_millis = current_millis;
-      night_reset_done = false;
+  if (pvVoltage <= 30) {
+    if (!isNight) {
+      isNight = true;
+      nightStartMillis = currentMillis;
+      nightResetDone = false;
     } else {
-      unsigned long night_duration;
-      if (current_millis < night_start_millis) {
-        night_duration = (0xFFFFFFFF - night_start_millis) + current_millis + 1;
+      unsigned long nightDuration;
+      if (currentMillis < nightStartMillis) {
+        nightDuration = (0xFFFFFFFF - nightStartMillis) + currentMillis + 1;
       } else {
-        night_duration = current_millis - night_start_millis;
+        nightDuration = currentMillis - nightStartMillis;
       }
-      
+
       // detect X hours without sun
-      if (night_duration >= (3*3600000) && !night_reset_done) {
+      if (nightDuration >= (3*3600000) && !nightResetDone) {
         dc.pv_energy_produced = 0.0;
-        night_reset_done = true;
+        nightResetDone = true;
         Serial.println("Night detected (6h) - PV energy reset to 0");
       }
     }
-    
-    last_pv_millis = current_millis;
+
+    lastPvMillis = currentMillis;
     return;
   } else {
-    if (is_night) {
-      is_night = false;
+    if (isNight) {
+      isNight = false;
       sprint("==> Night END");
     }
   }
-  
-  float power_to_use = (pv_power > 0.0) ? pv_power : (pv_voltage * pv_current);
-  updateEnergy(dc.pv_energy_produced, power_to_use, last_pv_millis, first_pv_call);
+
+  float powerToUse = (pvPower > 0.0) ? pvPower : (pvVoltage * pvCurrent);
+  updateEnergy(dc.pv_energy_produced, powerToUse, lastPvMillis, firstPvCall);
 }
 
 // Load energy data from Preferences
@@ -415,25 +415,25 @@ void saveEnergyData(bool force=false) {
 }
 
 // Read registers in chunks with retry logic
-uint8_t read_registers_chunked(uint16_t start_addr, uint16_t total_regs, uint16_t *data) {
-  uint16_t chunks = (total_regs + CHUNK_SIZE - 1) / CHUNK_SIZE;
-  uint16_t current_addr = start_addr;
-  uint16_t regs_read = 0;
+uint8_t readRegistersChunked(uint16_t startAddr, uint16_t totalRegs, uint16_t *data) {
+  uint16_t chunks = (totalRegs + CHUNK_SIZE - 1) / CHUNK_SIZE;
+  uint16_t currentAddr = startAddr;
+  uint16_t regsRead = 0;
   
   for (uint16_t chunk = 0; chunk < chunks; chunk++) {
-    uint16_t regs_to_read = min(CHUNK_SIZE, total_regs - regs_read);
+    uint16_t regsToRead = min(CHUNK_SIZE, totalRegs - regsRead);
     uint8_t attempts = 0;
     uint8_t success = 0;
-    
+
     while (attempts <= RETRY_COUNT && !success) {
-      uint8_t result = node.readHoldingRegisters(current_addr, regs_to_read);
-      
+      uint8_t result = node.readHoldingRegisters(currentAddr, regsToRead);
+
       if (result == node.ku8MBSuccess) {
-        for (uint16_t j = 0; j < regs_to_read; j++) {
-          data[regs_read + j] = node.getResponseBuffer(j);
+        for (uint16_t j = 0; j < regsToRead; j++) {
+          data[regsRead + j] = node.getResponseBuffer(j);
         }
         success = 1;
-        
+
       } else {
         attempts++;
         if (attempts < RETRY_COUNT) {
@@ -441,18 +441,18 @@ uint8_t read_registers_chunked(uint16_t start_addr, uint16_t total_regs, uint16_
         }
       }
     }
-    
+
     if (!success) {
       sprint("Failed to read chunk at addr ");
-      sprint(current_addr);
+      sprint(currentAddr);
       sprint(" after ");
       sprint(attempts);
       sprintln(" attempts");
       return 0;
     }
-    
-    regs_read += regs_to_read;
-    current_addr += regs_to_read;
+
+    regsRead += regsToRead;
+    currentAddr += regsToRead;
     
     if (chunk < chunks - 1) {
       delayMicroseconds(CHUNK_DELAY_US);
@@ -462,10 +462,10 @@ uint8_t read_registers_chunked(uint16_t start_addr, uint16_t total_regs, uint16_
   return 1;
 }
 
-void send_request() {
+void sendRequest() {
   sprintln("Reading registers 4501-4561 (61 regs)");
   unsigned long start = millis();
-  if (!read_registers_chunked(4501, MBUS_REGISTERS, mbus_data)) {
+  if (!readRegistersChunked(4501, MBUS_REGISTERS, mbusData)) {
     sprintln("Error reading registers");
     inverter.valid_info = 0;
     consecutive_failures++;
@@ -484,7 +484,7 @@ void send_request() {
       #endif
       
       timer.deleteTimer(timer.getNumTimers() - 1);
-      timer.setInterval(dynamic_read_interval, send_request);
+      timer.setInterval(dynamic_read_interval, sendRequest);
     }
     
     return;
@@ -527,28 +527,28 @@ void send_request() {
     #endif
     
     timer.deleteTimer(timer.getNumTimers() - 1);
-    timer.setInterval(dynamic_read_interval, send_request);
+    timer.setInterval(dynamic_read_interval, sendRequest);
   }
   
-  inverter.op_mode = (float)htons(mbus_data[0]);
+  inverter.op_mode = (float)htons(mbusData[0]);
   #ifdef VERBOSE_SERIAL
     sprint("inverter.op_mode: ");
     sprintln(inverter.op_mode);
   #endif
 
-  ac.input_voltage = htons(mbus_data[1]) / 10.0;
+  ac.input_voltage = htons(mbusData[1]) / 10.0;
   #ifdef VERBOSE_SERIAL
     sprint("ac.input_voltage: ");
     sprintln(ac.input_voltage);
   #endif
 
-  ac.input_freq = htons(mbus_data[2]) / 10.0;
+  ac.input_freq = htons(mbusData[2]) / 10.0;
   #ifdef VERBOSE_SERIAL
     sprint("ac.input_freq: ");
     sprintln(ac.input_freq);
   #endif
 
-  dc.pv_voltage = htons(mbus_data[3]) / 10.0;
+  dc.pv_voltage = htons(mbusData[3]) / 10.0;
   if (dc.pv_voltage < 6) {
     dc.pv_voltage = 0;
   }
@@ -557,7 +557,7 @@ void send_request() {
     sprintln(dc.pv_voltage);
   #endif
 
-  dc.pv_power = (float)htons(mbus_data[4]);
+  dc.pv_power = (float)htons(mbusData[4]);
   if (dc.pv_voltage < 6) {
     dc.pv_power = 0;
   }
@@ -576,19 +576,19 @@ void send_request() {
     sprintln(dc.pv_current);
   #endif
 
-  dc.voltage = htons(mbus_data[5]) / 10.0;
+  dc.voltage = htons(mbusData[5]) / 10.0;
   #ifdef VERBOSE_SERIAL
     sprint("dc.voltage: ");
     sprintln(dc.voltage);
   #endif
 
-  dc.charge_current = (float)htons(mbus_data[7]);
+  dc.charge_current = (float)htons(mbusData[7]);
   #ifdef VERBOSE_SERIAL
     sprint("dc.charge_current: ");
     sprintln(dc.charge_current);
   #endif
 
-  dc.discharge_current = (float)htons(mbus_data[8]);
+  dc.discharge_current = (float)htons(mbusData[8]);
   #ifdef VERBOSE_SERIAL
     sprint("dc.discharge_current: ");
     sprintln(dc.discharge_current);
@@ -606,25 +606,25 @@ void send_request() {
     sprintln(dc.charge_power);
   #endif
 
-  ac.output_voltage = htons(mbus_data[9]) / 10.0;
+  ac.output_voltage = htons(mbusData[9]) / 10.0;
   #ifdef VERBOSE_SERIAL
     sprint("ac.output_voltage: ");
     sprintln(ac.output_voltage);
   #endif
 
-  ac.output_freq = htons(mbus_data[10]) / 10.0;
+  ac.output_freq = htons(mbusData[10]) / 10.0;
   #ifdef VERBOSE_SERIAL
     sprint("ac.output_freq: ");
     sprintln(ac.output_freq);
   #endif
 
-  ac.output_va = (float)htons(mbus_data[11]);
+  ac.output_va = (float)htons(mbusData[11]);
   #ifdef VERBOSE_SERIAL
     sprint("ac.output_va: ");
     sprintln(ac.output_va);
   #endif
 
-  ac.output_watts = (float)htons(mbus_data[12]);
+  ac.output_watts = (float)htons(mbusData[12]);
   #ifdef VERBOSE_SERIAL
     sprint("ac.output_watts: ");
     sprintln(ac.output_watts);
@@ -641,31 +641,31 @@ void send_request() {
     sprintln(ac.power_factor);
   #endif
 
-  ac.output_load_percent = (float)htons(mbus_data[13]);
+  ac.output_load_percent = (float)htons(mbusData[13]);
   #ifdef VERBOSE_SERIAL
     sprint("ac.output_load_percent: ");
     sprintln(ac.output_load_percent);
   #endif
 
-  // inverter.charger_source_priority = (float)htons(mbus_data[35]);
+  // inverter.charger_source_priority = (float)htons(mbusData[35]);
   // #ifdef VERBOSE_SERIAL
   //   sprint("inverter.charger_source_priority: ");
   //   sprintln(inverter.charger_source_priority);
   // #endif
 
-  // inverter.output_source_priority = (float)htons(mbus_data[36]);
+  // inverter.output_source_priority = (float)htons(mbusData[36]);
   // #ifdef VERBOSE_SERIAL
   //   sprint("inverter.output_source_priority: ");
   //   sprintln(inverter.output_source_priority);
   // #endif
 
-  inverter.charger = (float)htons(mbus_data[54]);
+  inverter.charger = (float)htons(mbusData[54]);
   #ifdef VERBOSE_SERIAL
     sprint("inverter.charger: ");
     sprintln(inverter.charger);
   #endif
 
-  inverter.temp = (float)htons(mbus_data[56]);
+  inverter.temp = (float)htons(mbusData[56]);
   #ifdef VERBOSE_SERIAL
     sprint("inverter.temp: ");
     sprintln(inverter.temp);
@@ -738,9 +738,9 @@ void send_request() {
   #endif
 
   // AC output energy spent
-  static unsigned long last_ac_millis = 0;
-  static bool first_ac_call = true;
-  updateEnergy(inverter.energy_spent_ac, ac.output_watts, last_ac_millis, first_ac_call);
+  static unsigned long lastAcMillis = 0;
+  static bool firstAcCall = true;
+  updateEnergy(inverter.energy_spent_ac, ac.output_watts, lastAcMillis, firstAcCall);
 
   #ifdef VERBOSE_SERIAL
     sprint("inverter.energy_spent_ac: ");
@@ -824,7 +824,7 @@ void send_request() {
 }
 
 // OTA settings and mDSN
-void OTA_setup() {
+void otaSetup() {
   ArduinoOTA
       .onStart([]() {
         // Force save energy data before OTA update
@@ -865,7 +865,7 @@ void OTA_setup() {
   ArduinoOTA.setHostname(hostname);
 }
 
-void mDNS_setup() {
+void mdnsSetup() {
   if (!MDNS.begin(hostname)) {
     sprintln(F("Error setting up MDNS responder!"));
     while (10) {
@@ -878,7 +878,7 @@ void mDNS_setup() {
 }
 
 // Function to generate JSON strings
-String data_JSON() {
+String dataJson() {
     JsonDocument doc;
 
     JsonObject acObj = doc.createNestedObject("ac");
@@ -956,7 +956,7 @@ void serveIndex(AsyncWebServerRequest *request) {
 
 //  status
 void serveStatus(AsyncWebServerRequest *request) {
-  request->send(200, "application/json", data_JSON());
+  request->send(200, "application/json", dataJson());
   #ifdef VERBOSE_SERIAL
     sprintln("/status");
   #endif
@@ -987,7 +987,7 @@ void serveNames(AsyncWebServerRequest *request) {
 }
 
 
-void webserver_setup() {
+void webserverSetup() {
   server.onNotFound(notFound);
   server.on("/", HTTP_GET, serveIndex);
   server.on("/style.css", HTTP_GET, serveCSS);
@@ -1016,7 +1016,7 @@ void webserver_setup() {
   server.begin();
 }
 
-void do_wifi() {
+void doWifi() {
   WiFi.setTxPower(WIFI_POWER_5dBm);
 
   WiFi.disconnect();
@@ -1034,27 +1034,27 @@ void do_wifi() {
     delay(50);
 
     WiFi.softAP(s_ssid, s_password);
-    wifi_mode = 1;
+    wifiMode = 1;
 
-    myIP = WiFi.softAPIP();
+    myIp = WiFi.softAPIP();
   } else {
-    myIP = WiFi.localIP();
+    myIp = WiFi.localIP();
     sprintln("Connected to existent Wifi");
-    wifi_mode = 0;
+    wifiMode = 0;
   }
 
   sprintln("WiFi Ready");
   sprint("IP address: ");
-  sprintln(myIP);
+  sprintln(myIp);
 }
 
-void check_wifi() {
-  if (WiFi.status() != WL_CONNECTED & wifi_mode == 0) {
-    do_wifi();
+void checkWifi() {
+  if (WiFi.status() != WL_CONNECTED & wifiMode == 0) {
+    doWifi();
   }
 }
 
-void wifi_scan() {
+void wifiScan() {
   sprintln("Start wifi Scan for the AP");
   int n = WiFi.scanNetworks();
   if (n == 0) {
@@ -1063,7 +1063,7 @@ void wifi_scan() {
     for (int i = 0; i < n; ++i) {
       if (WiFi.SSID(i) == c_ssid) {
         sprintln("AP found, try to conenct");
-        do_wifi();
+        doWifi();
       } else {
         sprintln("No networks found");
       }
@@ -1076,7 +1076,7 @@ void idle() {
     yield();
 }
 
-void node_setup() {
+void nodeSetup() {
   // Initialize serial based on configuration
   Serial1.begin(2400, SERIAL_8N1, RXD2, TXD2);
   sprintln("Using Hardware Serial1");
@@ -1089,27 +1089,27 @@ void node_setup() {
   node.begin(5, Serial1);
   node.idle(idle);
 
-  timer.setInterval(dynamic_read_interval, send_request);
+  timer.setInterval(dynamic_read_interval, sendRequest);
 }
 
 void setup() {
   Serial.begin (MONITOR_SERIAL_SPEED);
 
-  do_wifi();
+  doWifi();
 
-  timer.setInterval(3*60*1000, check_wifi);
+  timer.setInterval(3*60*1000, checkWifi);
 
-  webserver_setup();
+  webserverSetup();
 
   delay(5*1000);
 
-  OTA_setup();
+  otaSetup();
   ArduinoOTA.begin();
 
   sprintln("OTA ready");
 
-  mDNS_setup();
-  
+  mdnsSetup();
+
   sprint("Firmware version: ");
   sprintln(VERSION);
 
@@ -1119,7 +1119,7 @@ void setup() {
     sprintln("SPIFFS init OK");
   }
 
-  node_setup();
+  nodeSetup();
 
   sprintln("Ready to rock...");
 }
