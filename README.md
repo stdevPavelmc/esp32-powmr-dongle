@@ -10,6 +10,7 @@ This code will do:
 - Connect to your WiFi network (see [WiFi](#wifi) section)
 - Make available a `/api/status` json endpoint in json format to consume and use on the index.html page (see [Json](#json) sections)
 - A http webserver (sample image on the top of this document) that can be called using hostname.local (see WiFi configuration for details on hostname)
+- There is a extra bidge app in python `mqtt_json_2_influx.py` file to run as a service on a linux machine to conecct either to the mqtt server or directly to the ESP32 web and retrieve the json file and push the data to a influxdb server.
 
 ## WiFi
 

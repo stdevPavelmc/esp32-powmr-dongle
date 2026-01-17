@@ -58,8 +58,8 @@ Preferences prefs;
 ModbusMaster node;
 #define MBUS_REGISTERS 61 // Words uint16, starting from 4501 to 4562
 #define CHUNK_SIZE 3
-#define RETRY_COUNT 2
-#define CHUNK_DELAY_US 100
+#define RETRY_COUNT 4
+#define CHUNK_DELAY_US 10
 uint16_t mbus_data[MBUS_REGISTERS + 1]; // allow for room
 
 // webserver related
@@ -182,7 +182,7 @@ String uptime() {
 }
 
 // dynamic readding interval
-uint16_t calculate_next_interval() {
+uint16_t calculateNextInterval() {
   if (inverter.read_time_mean == 0) {
     return INITIAL_READ_INTERVAL;
   }
@@ -516,7 +516,7 @@ void send_request() {
     #endif
   }
 
-  uint16_t new_interval = calculate_next_interval();
+  uint16_t new_interval = calculateNextInterval();
   if (new_interval != dynamic_read_interval) {
     dynamic_read_interval = new_interval;
     
