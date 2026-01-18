@@ -17,10 +17,10 @@ pio run
 # Build and upload to ESP32 via USB
 pio run -t upload
 
-# Build and upload via OTA (Over-The-Air) this is the default ran environment
+# Build and upload via OTA (Over-The-Air)
 pio run -t upload --environment esp32_OTA
 
-# Monitor serial output, only on esp32_USB env, in esp32_OTA env the monitor is done on webserial: open a browser page on the `upload_port` variable from the env's section of platformio.ini file like http://192.168.1.101/webserial 
+# Monitor serial output
 pio device monitor
 
 # Clean build files
@@ -29,6 +29,8 @@ pio run -t clean
 # Run all targets for default environment
 pio run -t clean -t build -t upload -t monitor
 ```
+
+**Note:** The project uses manual timing loops instead of SimpleTimer to ensure consistent execution intervals, preventing multiple consecutive calls during long operations like OTA updates.
 
 ### Python Bridge (Secondary) - Running the Application
 

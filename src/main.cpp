@@ -12,7 +12,6 @@
 #include <SPIFFS.h>
 #include <ArduinoJson.h>
 #include <ModbusMaster.h>
-#include <SimpleTimer.h>
 #include <Preferences.h>
 
 // local config on files
@@ -53,8 +52,9 @@ bool firstRun = true;
   #define sprintln(...) Serial.println(__VA_ARGS__)
 #endif
 
-// simple timer
-SimpleTimer timer;
+// Manual timing variables (replacing SimpleTimer)
+unsigned long lastSendRequestTime = 0;
+unsigned long lastWifiCheckTime = 0;
 
 // preferences for persistent storage
 Preferences prefs;
@@ -95,8 +95,8 @@ float autonomy_watts_ewma = 0.0;
 bool autonomy_initialized = false;
 
 // this is the linear part of the range
-#define BATT_MAX_VOLTAGE 27
-#define BATT_MIN_VOLTAGE 23
+#define BATT_MAX_VOLTAGE 28.8
+#define BATT_MIN_VOLTAGE 23.0
 
 // ac data
 struct ACData {
@@ -204,6 +204,20 @@ uint16_t calculateNextInterval() {
   }
   
    return base;
+}
+
+// Check if time interval has elapsed, handling millis() rollover
+bool hasTimeElapsed(unsigned long &lastTime, unsigned long currentTime, unsigned long interval) {
+  // Handle millis() rollover (occurs every ~49.7 days)
+  unsigned long timeDiff;
+  if (currentTime < lastTime) {
+    // Rollover occurred
+    timeDiff = (0xFFFFFFFF - lastTime) + currentTime + 1;
+  } else {
+    timeDiff = currentTime - lastTime;
+  }
+
+  return (timeDiff >= interval);
 }
 
 // calc Exponentially Weighted Moving Average
@@ -562,13 +576,10 @@ void sendRequest() {
     if (consecutive_failures >= MAX_FAILURES) {
       dynamic_read_interval = INITIAL_READ_INTERVAL;
       consecutive_failures = 0;
-      
+
       #ifdef VERBOSE_SERIAL
         sprintln("Max failures reached - reset to 15s interval");
       #endif
-      
-      timer.deleteTimer(timer.getNumTimers() - 1);
-      timer.setInterval(dynamic_read_interval, sendRequest);
     }
     
     return;
@@ -611,9 +622,6 @@ void sendRequest() {
       sprint(dynamic_read_interval);
       sprintln(" ms");
     #endif
-    
-    timer.deleteTimer(timer.getNumTimers() - 1);
-    timer.setInterval(dynamic_read_interval, sendRequest);
   }
 
   // Register 4501: Output Source Priority
@@ -1124,7 +1132,7 @@ void webserverSetup() {
 }
 
 void doWifi() {
-  WiFi.setTxPower(WIFI_POWER_5dBm);
+  // WiFi.setTxPower(WIFI_POWER_5dBm);
 
   WiFi.disconnect();
   WiFi.mode(WIFI_OFF);
@@ -1162,8 +1170,8 @@ void checkWifi() {
 }
 
 void idle() {
-    timer.run();
-    yield();
+  delay(1);
+  yield();
 }
 
 void nodeSetup() {
@@ -1178,16 +1186,12 @@ void nodeSetup() {
 
   node.begin(5, Serial1);
   node.idle(idle);
-
-  timer.setInterval(dynamic_read_interval, sendRequest);
 }
 
 void setup() {
   Serial.begin (MONITOR_SERIAL_SPEED);
 
   doWifi();
-
-  timer.setInterval(3*60*1000, checkWifi);
 
   webserverSetup();
 
@@ -1211,13 +1215,30 @@ void setup() {
 
   nodeSetup();
 
+  // Initialize timing variables for manual timer replacement
+  lastSendRequestTime = millis();
+  lastWifiCheckTime = millis();
+
   sprintln("Ready to rock...");
 }
 
 void loop() {
   ArduinoOTA.handle();
 
-  timer.run();
+  // Manual timing checks (replacing SimpleTimer)
+  unsigned long currentTime = millis();
+
+  // Check if it's time to call sendRequest
+  if (hasTimeElapsed(lastSendRequestTime, currentTime, dynamic_read_interval)) {
+    lastSendRequestTime = currentTime;
+    sendRequest();
+  }
+
+  // Check if it's time to call checkWifi (every 3 minutes)
+  if (hasTimeElapsed(lastWifiCheckTime, currentTime, 3 * 60 * 1000UL)) {
+    lastWifiCheckTime = currentTime;
+    checkWifi();
+  }
 
   delay(1);
 }
