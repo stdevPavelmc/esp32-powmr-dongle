@@ -35,17 +35,22 @@ const float MAXIMUM_ENERGY = 12.8*100*2;  // Wh
 const float MINIMUM_VOLTAGE = 22.0;   // V
 const float MAXIMUM_VOLTAGE = 28.8;   // V
 
+// Autonomy Calculation Configuration
+#define AUTONOMY_MAX_DAYS 2              // Maximum autonomy cap in days
+#define AUTONOMY_EFFICIENCY_CAP 93.0     // Maximum efficiency cap (%)
+#define AUTONOMY_WINDOW_MINUTES 5.0      // Time window for averaging (minutes)
+
 // Tracking variables
 unsigned long lastUpdateMillis = 0;
 bool firstRun = true;
 
 // rewrite prints
 #ifdef WEBSERIAL
-  #define sprint(x) WebSerial.print(x)
-  #define sprintln(x) WebSerial.println(x)
+  #define sprint(...) WebSerial.print(__VA_ARGS__)
+  #define sprintln(...) WebSerial.println(__VA_ARGS__)
 #else
-  #define sprint(x) Serial.print(x)
-  #define sprintln(x) Serial.println(x)
+  #define sprint(...) Serial.print(__VA_ARGS__)
+  #define sprintln(...) Serial.println(__VA_ARGS__)
 #endif
 
 // simple timer
@@ -82,6 +87,13 @@ uint16_t dynamic_read_interval = INITIAL_READ_INTERVAL;
 uint8_t consecutive_failures = 0;
 const uint8_t MAX_FAILURES = 3;
 
+// EWMA tracking variables
+float read_time_ewma = 0.0;
+bool read_time_initialized = false;
+float autonomy_efficiency_ewma = 0.0;
+float autonomy_watts_ewma = 0.0;
+bool autonomy_initialized = false;
+
 // this is the linear part of the range
 #define BATT_MAX_VOLTAGE 27
 #define BATT_MIN_VOLTAGE 23
@@ -92,7 +104,6 @@ struct ACData {
   float input_freq;
   float output_voltage;
   float output_freq;
-  float output_current;
   float output_va;
   float output_watts;
   float output_load_percent;
@@ -125,60 +136,51 @@ DCData dc;
 
 // inverter data
 struct InverterData {
-  float temp = 0;
-  /* Operational mode
+   float temp = 0;
+   /* Operational mode
     0:
     1:
     2:
     3: On Battery
     4: On AC
     5:
-  */
-  uint16_t op_mode;
-  /* Mapping
+   */
+   uint16_t op_mode;
+   /* Mapping
     0: b0000: ?
     1: b0001: ? AC cargando ?
     2: b0010: ?
     3: b0011: Descargando
     4: b0100: AC cargando
-  */
-  uint16_t charger;
-  /* Mapping in progress
+   */
+   uint16_t charger;
+   /* Mapping in progress
     10: b1010: Descargando desde Batería, no AC, no PV _chargers_off_?
     11: b1011: AC off, PV on (charging from PV) charge in progress _MPPT_ACTIVE ?
     12: b1100: _MPPT_and_AC_ACTIVE_ ?
       AC on, PV on (charging form both) charge in progress
       AC on, PV off (charging form AC) charge in progress
     13: b1101: AC on, PV on, completed charge, load from PV, _charger IDLE_ ?
-  */
-  float eff_w = 0;
-  float soc = 0;    // 0-100% per voltage range
-  byte valid_info = 0;
-  unsigned int read_time = 0;
-  unsigned int read_time_mean = 0;
-  float battery_energy = 0.0;
-  float gas_gauge = 0.0;
-  float energy_spent_ac = 0.0;
-  float energy_source_ac = 0.0;
-  float energy_source_batt = 0.0;
-  float energy_source_pv = 0.0;
+   */
+   float eff_w = 0;
+   float soc = 0;    // 0-100% per voltage range
+   byte valid_info = 0;
+   unsigned int read_time = 0;
+   unsigned int read_time_mean = 0;
+   float battery_energy = 0.0;
+   float gas_gauge = 0.0;
+   float energy_spent_ac = 0.0;
+   float energy_source_ac = 0.0;
+   float energy_source_batt = 0.0;
+   float energy_source_pv = 0.0;
+   unsigned int autonomy = AUTONOMY_MAX_DAYS * 24 * 60;  // Autonomy in minutes
 };
 
 InverterData inverter;
 
-String uptime() {
+unsigned int uptime() {
   unsigned long uptime_sec = millis() / 1000;
-  unsigned long days = uptime_sec / (60 * 60 * 24);
-  unsigned long hours = (uptime_sec % (60 * 60 * 24)) / (60 * 60);
-  unsigned long minutes = (uptime_sec % (60 * 60)) / 60;
-  
-  String uptime_str;
-  if (days > 0) {
-    uptime_str = String(days) + "d:" + String(hours) + "h:" + String(minutes) + "m";
-  } else {
-    uptime_str = String(hours) + "h:" + String(minutes) + "m";
-  }
-  return uptime_str;
+  return (unsigned int)(uptime_sec / 60); // Return uptime in minutes
 }
 
 // dynamic reading interval
@@ -201,7 +203,89 @@ uint16_t calculateNextInterval() {
     base = 30000;
   }
   
-  return base;
+   return base;
+}
+
+// calc Exponentially Weighted Moving Average
+void calculateEWMA(float &avg, float newVal, float alpha) {
+  float temp_avg = alpha * newVal + (1.0 - alpha) * avg;
+  avg = temp_avg;
+}
+
+// Calculate dynamic alpha for EWMA based on 5-minute window
+float calculateDynamicAlpha() {
+  // Calculate how many readings we get in 5 minutes at current interval
+  float readings_per_minute = 60000.0 / (float)dynamic_read_interval;  // ms to minutes conversion
+  float readings_in_window = readings_per_minute * AUTONOMY_WINDOW_MINUTES;
+
+  // Alpha = 2 / (N + 1) gives effective window of approximately N samples
+  // This ensures the EWMA covers the desired time window
+  float alpha = 2.0 / (readings_in_window + 1.0);
+
+  // Clamp alpha to reasonable bounds (0.01 to 0.5)
+  return constrain(alpha, 0.01, 0.5);
+}
+
+// Calculate battery autonomy in minutes using Exponentially Weighted Moving Average (EWMA)
+void calculateAutonomy() {
+  // Only calculate if we're on battery (full or partial) and have valid data
+  if (inverter.energy_source_batt > 0 && ac.output_watts > 0 && inverter.eff_w > 0) {
+    // Calculate dynamic alpha based on current read interval to cover 5-minute window
+    float autonomy_alpha = calculateDynamicAlpha();
+
+    // Cap efficiency at 93%
+    float capped_efficiency = (inverter.eff_w < AUTONOMY_EFFICIENCY_CAP) ? inverter.eff_w : AUTONOMY_EFFICIENCY_CAP;
+
+    // Update EWMA for efficiency
+    if (!autonomy_initialized) {
+      // Initialize with first valid reading
+      autonomy_efficiency_ewma = capped_efficiency;
+      autonomy_watts_ewma = ac.output_watts;
+      autonomy_initialized = true;
+    } else {
+      calculateEWMA(autonomy_efficiency_ewma, capped_efficiency, autonomy_alpha);
+      calculateEWMA(autonomy_watts_ewma, ac.output_watts, autonomy_alpha);
+    }
+
+    // Convert AC watts to DC watts (accounting for efficiency)
+    // DC power = AC power / (efficiency/100)
+    float dc_watts = autonomy_watts_ewma / (autonomy_efficiency_ewma / 100.0);
+
+    // Calculate hours remaining: battery_energy_wh / dc_power_watts
+    float hours_remaining = 0.0;
+    if (dc_watts > 0) {
+      hours_remaining = inverter.battery_energy / dc_watts;
+    }
+
+    // Convert to minutes and cap at maximum days
+    unsigned int minutes_remaining = (unsigned int)(hours_remaining * 60.0);
+    unsigned int max_minutes = AUTONOMY_MAX_DAYS * 24 * 60;
+
+    inverter.autonomy = min(minutes_remaining, max_minutes);
+
+    #ifdef VERBOSE_SERIAL
+      sprint("Autonomy EWMA (α=");
+      sprint(autonomy_alpha, 3);
+      sprint(") - Eff: ");
+      sprint(autonomy_efficiency_ewma, 1);
+      sprint("%, AC Watts: ");
+      sprint(autonomy_watts_ewma, 1);
+      sprint(", DC Watts: ");
+      sprint(dc_watts, 1);
+      sprint(", Hours left: ");
+      sprint(hours_remaining, 1);
+      sprint(" (");
+      sprint(inverter.autonomy);
+      sprintln(" min)");
+    #endif
+  } else {
+    // Not on battery or no valid data, set to maximum
+    inverter.autonomy = AUTONOMY_MAX_DAYS * 24 * 60;
+
+    #ifdef VERBOSE_SERIAL
+      sprintln("Autonomy: Not on battery or invalid data, set to max");
+    #endif
+  }
 }
 
 // Generic energy accumulation function
@@ -497,12 +581,14 @@ void sendRequest() {
     stop -= start;
     inverter.read_time = (unsigned int)stop;
 
-    byte HIST = 10;
-    if (inverter.read_time_mean == 0) {
+    // Calculate read time using EWMA with dynamic alpha for 5-minute window
+    if (!read_time_initialized) {
+      read_time_initialized = true;
       inverter.read_time_mean = inverter.read_time;
     } else {
-      stop = inverter.read_time_mean;
-      inverter.read_time_mean = (float)stop * ((HIST - 1.0)/HIST) + (inverter.read_time / HIST);
+      read_time_ewma = (float)inverter.read_time_mean;
+      calculateEWMA(read_time_ewma, inverter.read_time, calculateDynamicAlpha());
+      inverter.read_time_mean = read_time_ewma;
     }
     
     #ifdef VERBOSE_SERIAL
@@ -529,25 +615,29 @@ void sendRequest() {
     timer.deleteTimer(timer.getNumTimers() - 1);
     timer.setInterval(dynamic_read_interval, sendRequest);
   }
-  
+
+  // Register 4501: Output Source Priority
   inverter.op_mode = (float)htons(mbusData[0]);
   #ifdef VERBOSE_SERIAL
     sprint("inverter.op_mode: ");
     sprintln(inverter.op_mode);
   #endif
 
+  // Register 4502: AC Voltage (measurement)
   ac.input_voltage = htons(mbusData[1]) / 10.0;
   #ifdef VERBOSE_SERIAL
     sprint("ac.input_voltage: ");
     sprintln(ac.input_voltage);
   #endif
 
+  // Register 4503: AC Frequency (measurement)
   ac.input_freq = htons(mbusData[2]) / 10.0;
   #ifdef VERBOSE_SERIAL
     sprint("ac.input_freq: ");
     sprintln(ac.input_freq);
   #endif
 
+  // Register 4504: PV Voltage (measurement)
   dc.pv_voltage = htons(mbusData[3]) / 10.0;
   if (dc.pv_voltage < 6) {
     dc.pv_voltage = 0;
@@ -557,6 +647,7 @@ void sendRequest() {
     sprintln(dc.pv_voltage);
   #endif
 
+  // Register 4505: Charging (right now)
   dc.pv_power = (float)htons(mbusData[4]);
   if (dc.pv_voltage < 6) {
     dc.pv_power = 0;
@@ -576,18 +667,21 @@ void sendRequest() {
     sprintln(dc.pv_current);
   #endif
 
+  // Register 4506: Battery Voltage (measurement)
   dc.voltage = htons(mbusData[5]) / 10.0;
   #ifdef VERBOSE_SERIAL
     sprint("dc.voltage: ");
     sprintln(dc.voltage);
   #endif
 
+  // Register 4508: Battery Charge Current (measurement)
   dc.charge_current = (float)htons(mbusData[7]);
   #ifdef VERBOSE_SERIAL
     sprint("dc.charge_current: ");
     sprintln(dc.charge_current);
   #endif
 
+  // Register 4509: Battery Discharge Current (measurement)
   dc.discharge_current = (float)htons(mbusData[8]);
   #ifdef VERBOSE_SERIAL
     sprint("dc.discharge_current: ");
@@ -606,24 +700,28 @@ void sendRequest() {
     sprintln(dc.charge_power);
   #endif
 
+  // Register 4510: Load Voltage (measurement)
   ac.output_voltage = htons(mbusData[9]) / 10.0;
   #ifdef VERBOSE_SERIAL
     sprint("ac.output_voltage: ");
     sprintln(ac.output_voltage);
   #endif
 
+  // Register 4511: Load Frequency (measurement)
   ac.output_freq = htons(mbusData[10]) / 10.0;
   #ifdef VERBOSE_SERIAL
     sprint("ac.output_freq: ");
     sprintln(ac.output_freq);
   #endif
 
+  // Register 4512: Load Power (measurement)
   ac.output_va = (float)htons(mbusData[11]);
   #ifdef VERBOSE_SERIAL
     sprint("ac.output_va: ");
     sprintln(ac.output_va);
   #endif
 
+  // Register 4513: Load VA (measurement)
   ac.output_watts = (float)htons(mbusData[12]);
   #ifdef VERBOSE_SERIAL
     sprint("ac.output_watts: ");
@@ -641,30 +739,35 @@ void sendRequest() {
     sprintln(ac.power_factor);
   #endif
 
+  // Register 4514: Load Percent (measurement)
   ac.output_load_percent = (float)htons(mbusData[13]);
   #ifdef VERBOSE_SERIAL
     sprint("ac.output_load_percent: ");
     sprintln(ac.output_load_percent);
   #endif
 
+  // Register 4536: Charger Source Priority (settings)
   // inverter.charger_source_priority = (float)htons(mbusData[35]);
   // #ifdef VERBOSE_SERIAL
   //   sprint("inverter.charger_source_priority: ");
   //   sprintln(inverter.charger_source_priority);
   // #endif
 
+  // Register 4537: Output Source Priority (settings, more correct one)
   // inverter.output_source_priority = (float)htons(mbusData[36]);
   // #ifdef VERBOSE_SERIAL
   //   sprint("inverter.output_source_priority: ");
   //   sprintln(inverter.output_source_priority);
   // #endif
 
+  // Register 4555: Charger Status (0 - Off, 1 - Idle, 2 - Active)
   inverter.charger = (float)htons(mbusData[54]);
   #ifdef VERBOSE_SERIAL
     sprint("inverter.charger: ");
     sprintln(inverter.charger);
   #endif
 
+  // Register 4557: Temperature sensor
   inverter.temp = (float)htons(mbusData[56]);
   #ifdef VERBOSE_SERIAL
     sprint("inverter.temp: ");
@@ -817,10 +920,13 @@ void sendRequest() {
     sprintln(inverter.energy_source_batt);
     sprint("inverter.energy_source_pv: ");
     sprintln(inverter.energy_source_pv);
-  #endif
+   #endif
 
-  // Save energy data if thresholds exceeded
-  saveEnergyData();
+   // Calculate battery autonomy
+   calculateAutonomy();
+
+   // Save energy data if thresholds exceeded
+   saveEnergyData();
 }
 
 // OTA settings and mDSN
@@ -922,11 +1028,12 @@ String dataJson() {
     iObj["eff_w"] = inverter.eff_w;
     // iObj["output_source_priority"] = inverter.output_source_priority;
     iObj["energy_spent_ac"] = inverter.energy_spent_ac;
-    iObj["energy_source_ac"] = inverter.energy_source_ac;
-    iObj["energy_source_batt"] = inverter.energy_source_batt;
-    iObj["energy_source_pv"] = inverter.energy_source_pv;
-    iObj["json_size"] = doc.memoryUsage();
-    iObj["uptime"] = uptime();
+     iObj["energy_source_ac"] = inverter.energy_source_ac;
+     iObj["energy_source_batt"] = inverter.energy_source_batt;
+     iObj["energy_source_pv"] = inverter.energy_source_pv;
+     iObj["autonomy"] = inverter.autonomy;
+     iObj["json_size"] = doc.memoryUsage();
+     iObj["uptime"] = uptime();
 
     if (doc.overflowed()) {
         sprintln("ERROR - Json overflowed");
@@ -1051,23 +1158,6 @@ void doWifi() {
 void checkWifi() {
   if (WiFi.status() != WL_CONNECTED & wifiMode == 0) {
     doWifi();
-  }
-}
-
-void wifiScan() {
-  sprintln("Start wifi Scan for the AP");
-  int n = WiFi.scanNetworks();
-  if (n == 0) {
-    sprintln("no networks found");
-  } else {
-    for (int i = 0; i < n; ++i) {
-      if (WiFi.SSID(i) == c_ssid) {
-        sprintln("AP found, try to conenct");
-        doWifi();
-      } else {
-        sprintln("No networks found");
-      }
-    }
   }
 }
 
