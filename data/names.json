@@ -184,10 +184,20 @@
       "unit": "%",
       "description": "Percentage of output power sourced from battery"
     },
-    "energy_source_pv": {
-      "name": "Solar Source Percentage",
-      "unit": "%",
-      "description": "Percentage of output power sourced from solar panels"
-    }
-  }
-}
+     "energy_source_pv": {
+       "name": "Solar Source Percentage",
+       "unit": "%",
+       "description": "Percentage of output power sourced from solar panels"
+     },
+     "autonomy": {
+       "name": "Battery Autonomy",
+       "unit": "",
+       "description": "Estimated remaining runtime in minutes based on current consumption and battery energy"
+     },
+     "uptime": {
+       "name": "System Uptime",
+       "unit": "",
+       "description": "Time since system startup in minutes"
+     }
+   }
+ }

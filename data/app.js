@@ -34,15 +34,41 @@ async function fetchStatus() {
     }
 }
 
-function formatValue(val) {
+function formatValue(val, key = '', sectionKey = '') {
     if (val === null || val === undefined)
         return '-';
-        
+
+    // Special formatting for autonomy and uptime (minutes to days:hours:minutes)
+    if ((key === 'autonomy' || key === 'uptime') && sectionKey === 'inverter') {
+        return formatAutonomy(val);
+    }
+
     if (Number.isInteger(val) || typeof val === 'number' && val % 1 !== 0)
         return parseFloat(val).toFixed(1);
-    
+
     // final resort, return the value
     return val;
+}
+
+function formatAutonomy(minutes) {
+    if (!Number.isInteger(minutes) || minutes < 0) {
+        return minutes.toString();
+    }
+
+    const days = Math.floor(minutes / (24 * 60));
+    const hours = Math.floor((minutes % (24 * 60)) / 60);
+    const mins = minutes % 60;
+
+    let result = '';
+
+    // Only show days if there are any days
+    if (days > 0) {
+        result += days + 'd:';
+    }
+
+    result += hours + 'h:' + mins + 'm';
+
+    return result;
 }
 
 function createCard(key, value, sectionKey) {
@@ -63,7 +89,7 @@ function createCard(key, value, sectionKey) {
     
     const val = document.createElement('div');
     val.className = 'card-value';
-    val.textContent = formatValue(value);
+    val.textContent = formatValue(value, key, sectionKey);
     
     const unitEl = document.createElement('span');
     unitEl.className = 'card-unit';
