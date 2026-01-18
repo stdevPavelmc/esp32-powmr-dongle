@@ -71,10 +71,11 @@ The `/api/status` will produce a json like this:
 		"eff_w":84.40594,
 		"op_mode":4,
 		"output_source_priority":1,
-		"soc":100,
-		"temp":44,
-		"valid_info":1
-	}
+ 		"soc":100,
+ 		"temp":44,
+ 		"valid_info":1,
+ 		"autonomy": 2880
+ 	}
 }
 ```
 
@@ -146,6 +147,7 @@ bucket = powmr_cloud_backup
 - **Dual Input Sources**: Supports both MQTT subscriptions and HTTP polling
 - **Dual InfluxDB Servers**: Primary local server + optional cloud backup server
 - **Cloud Synchronization**: Automatically syncs missing data to cloud every 30 minutes
+- **Battery Autonomy**: Smart calculation using EWMA for accurate runtime estimates
 - **Change Detection**: Only writes to InfluxDB when values actually change (except for heartbeat)
 - **Zero Value Handling**: Zero values are sent only once, not repeatedly during heartbeat
 - **Data Validation**: Ensures data freshness by only heartbeating values read within the last 2 minutes
