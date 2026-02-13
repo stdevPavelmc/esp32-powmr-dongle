@@ -114,9 +114,9 @@
   "inverter": {
     "name": "Inverter System Section",
     "description": "Inverter/charger system status, settings, and operational parameters",
-    "read_interval_ms": {
+    "read_interval": {
       "name": "Data Read Interval",
-      "unit": "ms",
+      "unit": "s",
       "description": "Time between sensor data readings in milliseconds"
     },
     "valid_info": {
@@ -151,12 +151,12 @@
     },
     "read_time": {
       "name": "Last Read Time",
-      "unit": "ms",
+      "unit": "s",
       "description": "Time taken for the most recent data read operation"
     },
     "read_time_mean": {
       "name": "Average Read Time",
-      "unit": "ms",
+      "unit": "s",
       "description": "Average time taken for data read operations"
     },
     "gas_gauge": {
@@ -196,7 +196,7 @@
      },
      "uptime": {
        "name": "System Uptime",
-       "unit": "",
+       "unit": "s",
        "description": "Time since system startup in minutes"
      }
    }

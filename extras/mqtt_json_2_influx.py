@@ -216,8 +216,7 @@ class DataBridge:
                     continue
 
                 # Get read_time_mean and round to next 5 second multiple
-                read_time_mean_ms = data.get('inverter', {}).get('read_time_mean', self.http_poll_interval * 1000)
-                read_time_s = read_time_mean_ms / 1000.0
+                read_time_s = data.get('inverter', {}).get('read_time_mean', self.http_poll_interval)
                 
                 # Round up to next 5 second multiple
                 next_poll = ((int(read_time_s) + 4) // 5) * 5

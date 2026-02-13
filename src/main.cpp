@@ -20,14 +20,17 @@
 /********* Configurable flags *************/
 #define WEBSERIAL 1
 #define VERBOSE_SERIAL 1
+// #define DEBUG_AC 1
+// #define DEBUG_DC 1
+// #define DEBUG_INVERTER 1
 #define MONITOR_SERIAL_SPEED 9600
 #define VERSION  3.0
 
 // Preferences save thresholds
-#define SAVE_THRESHOLD_PV 0.05      // 50 Wh
-#define SAVE_THRESHOLD_BATT 1.0     // 1 Wh
-#define SAVE_THRESHOLD_GG 1.0       // 1%
-#define SAVE_THRESHOLD_AC 0.05      // 50 Wh
+#define SAVE_THRESHOLD_PV 5.0       // 5 Wh
+#define SAVE_THRESHOLD_BATT 5.0     // 1 Wh
+#define SAVE_THRESHOLD_GG 5.0       // 1%
+#define SAVE_THRESHOLD_AC 20.0      // 50 Wh
 
 // Battery Gas Gauge Configuration
 const float MAXIMUM_ENERGY = 12.8*100*2;  // Wh
@@ -82,13 +85,12 @@ bool wifiMode = 0; // 0 = client | 1 = AP
 #define RXD2   GPIO_NUM_16  // RXD2
 
 // Add these global variables near the top with other globals
-#define INITIAL_READ_INTERVAL 15000 // 15 seconds initial
-uint16_t dynamic_read_interval = INITIAL_READ_INTERVAL;
+#define INITIAL_READ_INTERVAL 5.0 // 5 seconds initial
+float dynamic_read_interval = INITIAL_READ_INTERVAL;
 uint8_t consecutive_failures = 0;
 const uint8_t MAX_FAILURES = 3;
 
 // EWMA tracking variables
-float read_time_ewma = 0.0;
 bool read_time_initialized = false;
 float autonomy_efficiency_ewma = 0.0;
 float autonomy_watts_ewma = 0.0;
@@ -165,8 +167,8 @@ struct InverterData {
    float eff_w = 0;
    float soc = 0;    // 0-100% per voltage range
    byte valid_info = 0;
-   unsigned int read_time = 0;
-   unsigned int read_time_mean = 0;
+   float read_time = 0.0;
+   float read_time_mean = 0.0;
    float battery_energy = 0.0;
    float gas_gauge = 0.0;
    float energy_spent_ac = 0.0;
@@ -180,27 +182,27 @@ InverterData inverter;
 
 unsigned int uptime() {
   unsigned long uptime_sec = millis() / 1000;
-  return (unsigned int)(uptime_sec / 60); // Return uptime in minutes
+  return (unsigned int)(uptime_sec ); // Return uptime in seconds
 }
 
 // dynamic reading interval
-uint16_t calculateNextInterval() {
-  if (inverter.read_time_mean == 0) {
-    return INITIAL_READ_INTERVAL;
+float calculateNextInterval() {
+  if (inverter.read_time_mean == 0.0) {
+    return (float)(INITIAL_READ_INTERVAL);
   }
   
   // Round up to next 5 second multiple
-  uint16_t base = (inverter.read_time_mean / 5000) * 5000;
-  if (inverter.read_time_mean % 5000 != 0) {
-    base += 5000;
+  float base = int(inverter.read_time_mean / 5) * 5;
+  if (fmod(inverter.read_time_mean, 5.0) != 0.0) {
+    base += 5.0;
   }
   
   // Ensure minimum of 5 seconds max of 30 seconds
-  if (base < 5000) {
-    base = 5000;
+  if (base < 5.0) {
+    base = 5.0;
   }
-  if (base > 30000) {
-    base = 30000;
+  if (base > 30.0) {
+    base = 30.0;
   }
   
    return base;
@@ -229,7 +231,7 @@ void calculateEWMA(float &avg, float newVal, float alpha) {
 // Calculate dynamic alpha for EWMA based on 5-minute window
 float calculateDynamicAlpha() {
   // Calculate how many readings we get in 5 minutes at current interval
-  float readings_per_minute = 60000.0 / (float)dynamic_read_interval;  // ms to minutes conversion
+  float readings_per_minute = 60.0 / dynamic_read_interval;
   float readings_in_window = readings_per_minute * AUTONOMY_WINDOW_MINUTES;
 
   // Alpha = 2 / (N + 1) gives effective window of approximately N samples
@@ -295,10 +297,6 @@ void calculateAutonomy() {
   } else {
     // Not on battery or no valid data, set to maximum
     inverter.autonomy = AUTONOMY_MAX_DAYS * 24 * 60;
-
-    #ifdef VERBOSE_SERIAL
-      sprintln("Autonomy: Not on battery or invalid data, set to max");
-    #endif
   }
 }
 
@@ -372,15 +370,19 @@ void updatePVEnergy(float pvVoltage, float pvCurrent, float pvPower) {
   static bool firstPvCall = true;
   static unsigned long nightStartMillis = 0;
   static bool isNight = false;
-  static bool nightResetDone = false;
+  static bool sixHourDarknessPassed = false;
+  static bool sunriseDetected = false;
+  static float previousPvVoltage = 0.0;
 
   unsigned long currentMillis = millis();
   
   if (pvVoltage <= 30) {
+    // Night time (PV voltage below threshold)
     if (!isNight) {
       isNight = true;
       nightStartMillis = currentMillis;
-      nightResetDone = false;
+      sixHourDarknessPassed = false;
+      sunriseDetected = false;
     } else {
       unsigned long nightDuration;
       if (currentMillis < nightStartMillis) {
@@ -389,23 +391,38 @@ void updatePVEnergy(float pvVoltage, float pvCurrent, float pvPower) {
         nightDuration = currentMillis - nightStartMillis;
       }
 
-      // detect X hours without sun
-      if (nightDuration >= (3*3600000) && !nightResetDone) {
-        dc.pv_energy_produced = 0.0;
-        nightResetDone = true;
-        Serial.println("Night detected (6h) - PV energy reset to 0");
+      // Detect 6 hours without sun
+      if (nightDuration >= (6*3600000) && !sixHourDarknessPassed) {
+        sixHourDarknessPassed = true;
+        Serial.println("Night detected (6h darkness) - Ready for sunrise reset");
       }
     }
 
+    previousPvVoltage = pvVoltage;
     lastPvMillis = currentMillis;
     return;
   } else {
+    // Day time (PV voltage above threshold)
     if (isNight) {
+      // Check if this is a sunrise event (voltage rising from <=30 to >30)
+      if (previousPvVoltage <= 30 && pvVoltage > 30) {
+        sunriseDetected = true;
+        sprint("==> Sunrise detected");
+        
+        // Reset PV energy only if 6-hour darkness has passed
+        if (sixHourDarknessPassed) {
+          dc.pv_energy_produced = 0.0;
+          sixHourDarknessPassed = false;
+          Serial.println("Sunrise after 6h darkness - PV energy reset to 0");
+        } else {
+          sprint("Sunrise before 6h darkness - keeping energy data");
+        }
+      }
       isNight = false;
-      sprint("==> Night END");
     }
   }
 
+  previousPvVoltage = pvVoltage;
   float powerToUse = (pvPower > 0.0) ? pvPower : (pvVoltage * pvCurrent);
   updateEnergy(dc.pv_energy_produced, powerToUse, lastPvMillis, firstPvCall);
 }
@@ -421,7 +438,7 @@ void loadEnergyData() {
     inverter.gas_gauge = prefs.getFloat("gas_gauge", 0.0);
     inverter.energy_spent_ac = prefs.getFloat("ac_energy", 0.0);
 
-    sprintln("Loaded energy data from Preferences:");
+    sprintln("==> Loaded energy data from Preferences:");
     sprint("  PV energy: ");
     sprintln(dc.pv_energy_produced);
     sprint("  Battery energy: ");
@@ -507,7 +524,7 @@ void saveEnergyData(bool force=false) {
     last_ac = inverter.energy_spent_ac;
 
     #ifdef VERBOSE_SERIAL
-      sprintln("Energy data saved to Preferences");
+      sprintln("==> Energy data saved to Preferences");
     #endif
   }
 }
@@ -561,7 +578,7 @@ uint8_t readRegistersChunked(uint16_t startAddr, uint16_t totalRegs, uint16_t *d
 }
 
 void sendRequest() {
-  sprintln("Reading registers 4501-4561 (61 regs)");
+  sprintln("==> Reading registers 4501-4561 (61 regs)");
   unsigned long start = millis();
   if (!readRegistersChunked(4501, MBUS_REGISTERS, mbusData)) {
     sprintln("Error reading registers");
@@ -590,16 +607,14 @@ void sendRequest() {
   unsigned long stop = millis();
   if (stop > start) {
     stop -= start;
-    inverter.read_time = (unsigned int)stop;
+    inverter.read_time = (float)stop / 1000.0;
 
     // Calculate read time using EWMA with dynamic alpha for 5-minute window
     if (!read_time_initialized) {
       read_time_initialized = true;
       inverter.read_time_mean = inverter.read_time;
     } else {
-      read_time_ewma = (float)inverter.read_time_mean;
-      calculateEWMA(read_time_ewma, inverter.read_time, calculateDynamicAlpha());
-      inverter.read_time_mean = read_time_ewma;
+      calculateEWMA(inverter.read_time_mean, inverter.read_time, calculateDynamicAlpha());
     }
     
     #ifdef VERBOSE_SERIAL
@@ -613,34 +628,34 @@ void sendRequest() {
     #endif
   }
 
-  uint16_t new_interval = calculateNextInterval();
+  float new_interval = calculateNextInterval();
   if (new_interval != dynamic_read_interval) {
     dynamic_read_interval = new_interval;
     
     #ifdef VERBOSE_SERIAL
       sprint("Adjusting read interval to: ");
-      sprint(dynamic_read_interval);
-      sprintln(" ms");
+      sprint(dynamic_read_interval, 2);
+      sprintln(" s");
     #endif
   }
 
   // Register 4501: Output Source Priority
   inverter.op_mode = (float)htons(mbusData[0]);
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_INVERTER
     sprint("inverter.op_mode: ");
     sprintln(inverter.op_mode);
   #endif
 
   // Register 4502: AC Voltage (measurement)
   ac.input_voltage = htons(mbusData[1]) / 10.0;
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_AC
     sprint("ac.input_voltage: ");
     sprintln(ac.input_voltage);
   #endif
 
   // Register 4503: AC Frequency (measurement)
   ac.input_freq = htons(mbusData[2]) / 10.0;
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_AC
     sprint("ac.input_freq: ");
     sprintln(ac.input_freq);
   #endif
@@ -650,7 +665,7 @@ void sendRequest() {
   if (dc.pv_voltage < 6) {
     dc.pv_voltage = 0;
   }
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_DC
     sprint("dc.pv_voltage: ");
     sprintln(dc.pv_voltage);
   #endif
@@ -660,7 +675,7 @@ void sendRequest() {
   if (dc.pv_voltage < 6) {
     dc.pv_power = 0;
   }
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_DC
     sprint("dc.pv_power: ");
     sprintln(dc.pv_power);
   #endif
@@ -670,68 +685,68 @@ void sendRequest() {
   } else {
     dc.pv_current = 0;
   }
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_DC
     sprint("dc.pv_current: ");
     sprintln(dc.pv_current);
   #endif
 
   // Register 4506: Battery Voltage (measurement)
   dc.voltage = htons(mbusData[5]) / 10.0;
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_DC
     sprint("dc.voltage: ");
     sprintln(dc.voltage);
   #endif
 
   // Register 4508: Battery Charge Current (measurement)
   dc.charge_current = (float)htons(mbusData[7]);
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_DC
     sprint("dc.charge_current: ");
     sprintln(dc.charge_current);
   #endif
 
   // Register 4509: Battery Discharge Current (measurement)
   dc.discharge_current = (float)htons(mbusData[8]);
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_DC
     sprint("dc.discharge_current: ");
     sprintln(dc.discharge_current);
   #endif
 
   dc.discharge_power = dc.voltage * dc.discharge_current;
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_DC
     sprint("dc.discharge_power: ");
     sprintln(dc.discharge_power);
   #endif
 
   dc.charge_power = dc.voltage * dc.charge_current;
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_DC
     sprint("dc.charge_power: ");
     sprintln(dc.charge_power);
   #endif
 
   // Register 4510: Load Voltage (measurement)
   ac.output_voltage = htons(mbusData[9]) / 10.0;
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_AC
     sprint("ac.output_voltage: ");
     sprintln(ac.output_voltage);
   #endif
 
   // Register 4511: Load Frequency (measurement)
   ac.output_freq = htons(mbusData[10]) / 10.0;
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_AC
     sprint("ac.output_freq: ");
     sprintln(ac.output_freq);
   #endif
 
   // Register 4512: Load Power (measurement)
   ac.output_va = (float)htons(mbusData[11]);
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_AC
     sprint("ac.output_va: ");
     sprintln(ac.output_va);
   #endif
 
   // Register 4513: Load VA (measurement)
   ac.output_watts = (float)htons(mbusData[12]);
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_AC
     sprint("ac.output_watts: ");
     sprintln(ac.output_watts);
   #endif
@@ -742,14 +757,14 @@ void sendRequest() {
   } else {
     ac.power_factor = 1;
   }
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_AC
     sprint("ac.power_factor: ");
     sprintln(ac.power_factor);
   #endif
 
   // Register 4514: Load Percent (measurement)
   ac.output_load_percent = (float)htons(mbusData[13]);
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_AC
     sprint("ac.output_load_percent: ");
     sprintln(ac.output_load_percent);
   #endif
@@ -770,14 +785,14 @@ void sendRequest() {
 
   // Register 4555: Charger Status (0 - Off, 1 - Idle, 2 - Active)
   inverter.charger = (float)htons(mbusData[54]);
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_INVERTER
     sprint("inverter.charger: ");
     sprintln(inverter.charger);
   #endif
 
   // Register 4557: Temperature sensor
   inverter.temp = (float)htons(mbusData[56]);
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_INVERTER
     sprint("inverter.temp: ");
     sprintln(inverter.temp);
   #endif
@@ -788,13 +803,13 @@ void sendRequest() {
     dc.new_k = (dc.voltage - dc.voltage_) / charge_current_change;
     dc.batt_v_compensation_k += (dc.new_k - dc.batt_v_compensation_k) * 0.1;
 
-    #ifdef VERBOSE_SERIAL
+    #ifdef DEBUG_DC
       sprint("dc.new_k: ");
       sprintln(dc.new_k);
     #endif
   }
 
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_DC
     sprint("dc.batt_v_compensation_k: ");
     sprintln(dc.batt_v_compensation_k);
   #endif
@@ -802,14 +817,14 @@ void sendRequest() {
   dc.voltage_corrected = dc.voltage - (dc.batt_v_compensation_k * dc.charge_current)
                                     + (dc.batt_v_compensation_k * dc.discharge_current);
 
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_DC
     sprint("dc.voltage_corrected: ");
     sprintln(dc.voltage_corrected);
   #endif
 
   float soc = 100.0 * (dc.voltage_corrected - BATT_MIN_VOLTAGE) / (BATT_MAX_VOLTAGE - BATT_MIN_VOLTAGE);
   inverter.soc = (float)constrain(soc, 0, 100);
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_INVERTER
     sprint("inverter.soc: ");
     sprintln(inverter.soc);
   #endif
@@ -818,7 +833,7 @@ void sendRequest() {
   if (input_power > 0) {
     inverter.eff_w = (100.0 * ac.output_watts) / input_power;
   }
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_INVERTER
     sprint("inverter.eff_w: ");
     sprintln(inverter.eff_w);
   #endif
@@ -831,19 +846,19 @@ void sendRequest() {
 
   updateBatteryEnergy(dc.voltage_corrected, dc.charge_current, dc.discharge_current);
 
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_INVERTER
     sprint("inverter.gas_gauge: ");
     sprintln(inverter.gas_gauge);
   #endif
 
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_INVERTER
     sprint("inverter.battery_energy: ");
     sprintln(inverter.battery_energy);
   #endif
 
   updatePVEnergy(dc.pv_voltage, dc.pv_current, dc.pv_power);
 
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_DC
     sprint("dc.pv_energy_produced: ");
     sprintln(dc.pv_energy_produced);
   #endif
@@ -853,7 +868,7 @@ void sendRequest() {
   static bool firstAcCall = true;
   updateEnergy(inverter.energy_spent_ac, ac.output_watts, lastAcMillis, firstAcCall);
 
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_AC
     sprint("inverter.energy_spent_ac: ");
     sprintln(inverter.energy_spent_ac);
   #endif
@@ -921,7 +936,7 @@ void sendRequest() {
   if (inverter.energy_source_pv < 0) inverter.energy_source_pv = 0;
   if (inverter.energy_source_pv > 100) inverter.energy_source_pv = 100;
 
-  #ifdef VERBOSE_SERIAL
+  #ifdef DEBUG_INVERTER
     sprint("inverter.energy_source_ac: ");
     sprintln(inverter.energy_source_ac);
     sprint("inverter.energy_source_batt: ");
@@ -995,7 +1010,7 @@ void mdnsSetup() {
 String dataJson() {
     JsonDocument doc;
 
-    JsonObject acObj = doc.createNestedObject("ac");
+    JsonObject acObj = doc["ac"].to<JsonObject>();
     acObj["input_voltage"] = ac.input_voltage;
     acObj["input_freq"] = ac.input_freq;
     acObj["output_voltage"] = ac.output_voltage;
@@ -1005,7 +1020,7 @@ String dataJson() {
     acObj["output_va"] = ac.output_va;
     acObj["output_watts"] = ac.output_watts;
 
-    JsonObject dcObj = doc.createNestedObject("dc");
+    JsonObject dcObj = doc["dc"].to<JsonObject>();
     dcObj["voltage"] = dc.voltage;
     dcObj["voltage_corrected"] = dc.voltage_corrected;
     dcObj["charge_power"] = dc.charge_power;
@@ -1015,20 +1030,20 @@ String dataJson() {
     dcObj["new_k"] = dc.new_k;
     dcObj["batt_v_compensation_k"] = dc.batt_v_compensation_k;
 
-    JsonObject pvObj = doc.createNestedObject("pv");
+    JsonObject pvObj = doc["pv"].to<JsonObject>();
     pvObj["pv_voltage"] = dc.pv_voltage;
     pvObj["pv_power"] = dc.pv_power;
     pvObj["pv_current"] = dc.pv_current;
     pvObj["pv_energy_produced"] = dc.pv_energy_produced;
 
-    JsonObject iObj = doc.createNestedObject("inverter");
+    JsonObject iObj = doc["inverter"].to<JsonObject>();
     iObj["valid_info"] = inverter.valid_info;
     iObj["op_mode"] = inverter.op_mode;
     iObj["soc"] = inverter.soc;
     iObj["gas_gauge"] = inverter.gas_gauge;
     iObj["battery_energy"] = inverter.battery_energy;
     iObj["temp"] = inverter.temp;
-    iObj["read_interval_ms"] = dynamic_read_interval;
+    iObj["read_interval"] = dynamic_read_interval;
     iObj["read_time"] = inverter.read_time;
     iObj["read_time_mean"] = inverter.read_time_mean;
     iObj["charger"] = inverter.charger;
@@ -1036,17 +1051,17 @@ String dataJson() {
     iObj["eff_w"] = inverter.eff_w;
     // iObj["output_source_priority"] = inverter.output_source_priority;
     iObj["energy_spent_ac"] = inverter.energy_spent_ac;
-     iObj["energy_source_ac"] = inverter.energy_source_ac;
-     iObj["energy_source_batt"] = inverter.energy_source_batt;
-     iObj["energy_source_pv"] = inverter.energy_source_pv;
-     iObj["autonomy"] = inverter.autonomy;
-     iObj["json_size"] = doc.memoryUsage();
-     iObj["uptime"] = uptime();
+    iObj["energy_source_ac"] = inverter.energy_source_ac;
+    iObj["energy_source_batt"] = inverter.energy_source_batt;
+    iObj["energy_source_pv"] = inverter.energy_source_pv;
+    iObj["autonomy"] = inverter.autonomy;
+    iObj["json_size"] = measureJson(doc);
+    iObj["uptime"] = uptime();
 
     if (doc.overflowed()) {
         sprintln("ERROR - Json overflowed");
         sprint("Doc Usage: ");
-        sprintln((int)doc.memoryUsage());
+        sprintln((int)measureJson(doc));
     }
 
     String output;
@@ -1229,7 +1244,7 @@ void loop() {
   unsigned long currentTime = millis();
 
   // Check if it's time to call sendRequest
-  if (hasTimeElapsed(lastSendRequestTime, currentTime, dynamic_read_interval)) {
+  if (hasTimeElapsed(lastSendRequestTime, currentTime, uint16_t(dynamic_read_interval * 1000))) {
     lastSendRequestTime = currentTime;
     sendRequest();
   }
