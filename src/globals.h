@@ -28,6 +28,9 @@ extern IPAddress myIp;
 // WiFi status: 0 = client, 1 = AP
 extern bool wifiMode;
 
+// AP mode reconnection tracking
+extern unsigned long apModeStartTime;
+
 // Timing variables
 extern unsigned long lastSendRequestTime;
 extern unsigned long lastWifiCheckTime;

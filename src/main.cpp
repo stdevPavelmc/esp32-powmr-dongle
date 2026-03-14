@@ -45,6 +45,9 @@ IPAddress myIp;
 // WiFi status: 0 = client, 1 = AP
 bool wifiMode = 0;
 
+// AP mode reconnection tracking
+unsigned long apModeStartTime = 0;
+
 // Timing variables
 unsigned long lastSendRequestTime = 0;
 unsigned long lastWifiCheckTime = 0;
@@ -80,7 +83,8 @@ InverterData inverter;
 void setup() {
   Serial.begin(MONITOR_SERIAL_SPEED);
 
-  doWifi();
+  // Initialize WiFi mode from persistent storage
+  initWifiMode();
 
   webserverSetup();
 
@@ -130,6 +134,9 @@ void loop() {
     lastWifiCheckTime = currentTime;
     checkWifi();
   }
+
+  // Try to reconnect to client network when in AP mode (every 2 minutes)
+  tryReconnectToClient();
 
   delay(1);
 }

@@ -14,4 +14,10 @@ void doWifi();
 // Check WiFi connection and reconnect if needed
 void checkWifi();
 
+// Attempt to reconnect to client WiFi when in AP mode (called periodically)
+void tryReconnectToClient();
+
+// Initialize WiFi mode from persistent storage
+void initWifiMode();
+
 #endif // WIFI_H
