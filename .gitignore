@@ -1,6 +1,6 @@
 .pio
 .vscode
 lib/
-src/wifi.h
+src/wifi_creds.h
 __pycache__
 */__pycache__

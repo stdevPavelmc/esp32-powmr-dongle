@@ -5,10 +5,11 @@
 #include "globals.h"
 #include <Arduino.h>
 
-// Get uptime in seconds
+// Get uptime in minutes
 unsigned int uptime() {
   unsigned long uptime_sec = millis() / 1000;
-  return (unsigned int)(uptime_sec);
+  // minutes
+  return (unsigned int)(uptime_sec / 60);
 }
 
 // Check if time interval has elapsed, handling millis() rollover
