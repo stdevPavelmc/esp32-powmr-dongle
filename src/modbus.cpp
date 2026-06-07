@@ -203,9 +203,13 @@ void sendRequest() {
   float soc = 100.0 * (dc.voltage_corrected - BATT_MIN_VOLTAGE) / (BATT_MAX_VOLTAGE - BATT_MIN_VOLTAGE);
   inverter.soc = (float)constrain(soc, 0, 100);
 
-  float input_power = dc.pv_power + dc.discharge_power;
-  if (input_power > 0) {
-    inverter.eff_w = (100.0 * ac.output_watts) / input_power;
+  float total_input_power = dc.pv_power + dc.discharge_power;
+  float total_output_power = ac.output_watts + dc.charge_power;
+
+  if (total_output_power > 0 && total_input_power > 0) {
+    inverter.eff_w = constrain((100.0 * total_output_power) / total_input_power, 0.0, 100.0);
+  } else if (total_output_power == 0 && total_input_power == 0) {
+    inverter.eff_w = 0.0;
   }
   
   dc.voltage_ = dc.voltage;
@@ -230,58 +234,48 @@ void sendRequest() {
     energy_data_loaded = true;
   }
 
-  // Calculate energy source percentages
+  // Calculate energy source percentages based on actual measured power
   inverter.energy_source_ac = 0.0;
   inverter.energy_source_batt = 0.0;
   inverter.energy_source_pv = 0.0;
-  
-  const float PV_EFFICIENCY = 0.80;
-  const float DC_EFFICIENCY = 0.80;
-  
-  bool has_ac = (ac.input_voltage > 100);
-  bool has_pv = (dc.pv_power > 0);
-  
-  if (ac.output_watts > 0) {
-    if (has_ac && !has_pv) {
-      inverter.energy_source_ac = 100.0;
-    } else if (!has_ac && !has_pv && dc.discharge_power > 0) {
-      inverter.energy_source_batt = 100.0;
-    } else if (has_ac && has_pv) {
-      float pv_available = dc.pv_power;
-      if (dc.charge_power > 0) {
-        pv_available -= dc.charge_power;
-        if (pv_available < 0) pv_available = 0;
+
+  bool has_ac_input = (ac.input_voltage > 100.0);
+  float total_dc_source = dc.pv_power + dc.discharge_power;
+  float total_load = ac.output_watts + dc.charge_power;
+
+  if (total_load > 0 && (total_dc_source > 0 || has_ac_input)) {
+    // When AC input is present, it can contribute to the load via pass-through
+    float ac_input_contribution = 0.0;
+    if (has_ac_input && ac.output_watts > 0) {
+      // AC input covers the portion of AC load NOT powered by DC sources
+      float dc_cover = dc.pv_power;  // PV power available at AC output
+      // Some PV is going to charging, subtract that if charging
+      float pv_to_load = dc.pv_power;
+      if (dc.charge_power > 0 && dc.pv_power > 0) {
+        // PV is split between charging and AC load
+        pv_to_load = dc.pv_power - dc.charge_power;
+        if (pv_to_load < 0) pv_to_load = 0;
       }
-      
-      float pv_contribution = pv_available * PV_EFFICIENCY;
-      float ac_contribution = ac.output_watts - pv_contribution;
-      if (ac_contribution < 0) ac_contribution = 0;
-      
-      inverter.energy_source_pv = (pv_contribution / ac.output_watts) * 100.0;
-      inverter.energy_source_ac = (ac_contribution / ac.output_watts) * 100.0;
-    } else if (!has_ac && has_pv) {
-      float pv_contribution = dc.pv_power * PV_EFFICIENCY;
-      float batt_contribution = 0;
-      
-      if (dc.discharge_power > 0) {
-        batt_contribution = dc.discharge_power * DC_EFFICIENCY;
-      }
-      
-      float total = pv_contribution + batt_contribution;
-      
-      if (total > 0) {
-        inverter.energy_source_pv = (pv_contribution / total) * 100.0;
-        inverter.energy_source_batt = (batt_contribution / total) * 100.0;
-      }
+      ac_input_contribution = ac.output_watts - pv_to_load;
+      if (ac_input_contribution < 0) ac_input_contribution = 0;
     }
+
+    // Total energy from all sources feeding the system
+    float total_with_ac = total_dc_source + ac_input_contribution;
+    if (total_with_ac > 0) {
+      inverter.energy_source_pv = (dc.pv_power / total_with_ac) * 100.0;
+      inverter.energy_source_batt = (dc.discharge_power / total_with_ac) * 100.0;
+      inverter.energy_source_ac = (ac_input_contribution / total_with_ac) * 100.0;
+    }
+
+    // Clamp to valid range
+    if (inverter.energy_source_pv < 0) inverter.energy_source_pv = 0;
+    if (inverter.energy_source_pv > 100) inverter.energy_source_pv = 100;
+    if (inverter.energy_source_batt < 0) inverter.energy_source_batt = 0;
+    if (inverter.energy_source_batt > 100) inverter.energy_source_batt = 100;
+    if (inverter.energy_source_ac < 0) inverter.energy_source_ac = 0;
+    if (inverter.energy_source_ac > 100) inverter.energy_source_ac = 100;
   }
-  
-  if (inverter.energy_source_ac < 0) inverter.energy_source_ac = 0;
-  if (inverter.energy_source_ac > 100) inverter.energy_source_ac = 100;
-  if (inverter.energy_source_batt < 0) inverter.energy_source_batt = 0;
-  if (inverter.energy_source_batt > 100) inverter.energy_source_batt = 100;
-  if (inverter.energy_source_pv < 0) inverter.energy_source_pv = 0;
-  if (inverter.energy_source_pv > 100) inverter.energy_source_pv = 100;
 
   // Calculate battery autonomy
   calculateAutonomy();

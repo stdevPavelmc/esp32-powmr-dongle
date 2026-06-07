@@ -130,9 +130,9 @@
       "description": "Current state/status of the battery charging system"
     },
     "eff_w": {
-      "name": "Real Power Efficiency",
+      "name": "System Efficiency",
       "unit": "%",
-      "description": "Efficiency calculation based on real power"
+      "description": "Overall system efficiency: (AC output + battery charge power) / (PV input + battery discharge power)"
     },
     "op_mode": {
       "name": "Operating Mode",
