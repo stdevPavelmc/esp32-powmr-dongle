@@ -8,6 +8,7 @@
 #include "webserver.h"
 #include "globals.h"
 #include "json_utils.h"
+#include "energy.h"
 
 // Print macros for this module
 #ifdef WEBSERIAL
@@ -26,6 +27,12 @@ void notFound(AsyncWebServerRequest *request) {
 
 // Serve index.html
 void serveIndex(AsyncWebServerRequest *request) {
+  if (request->hasParam("set")) {
+    float val = request->getParam("set")->value().toFloat();
+    inverter.gas_gauge = val;
+    inverter.battery_energy = (val * MAXIMUM_ENERGY) / 100.0;
+    saveEnergyData(true);
+  }
   request->send(SPIFFS, "/index.html");
   #ifdef VERBOSE_SERIAL
     sprintln("/ ");

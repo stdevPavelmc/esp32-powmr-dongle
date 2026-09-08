@@ -12,7 +12,7 @@
 // #define DEBUG_INVERTER 1
 
 #define MONITOR_SERIAL_SPEED 9600
-#define VERSION  3.5
+#define VERSION  3.6
 
 // Preferences save thresholds
 #define SAVE_THRESHOLD_PV 5.0       // 5 Wh

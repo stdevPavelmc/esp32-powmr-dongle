@@ -2,6 +2,7 @@
 // Modularized from main.cpp
 
 #include "json_utils.h"
+#include "config.h"
 #include "globals.h"
 #include "utils.h"
 
@@ -44,6 +45,8 @@ String dataJson() {
     pvObj["pv_power"] = dc.pv_power;
     pvObj["pv_current"] = dc.pv_current;
     pvObj["pv_energy_produced"] = dc.pv_energy_produced;
+
+    doc["version"] = VERSION;
 
     JsonObject iObj = doc["inverter"].to<JsonObject>();
     iObj["valid_info"] = inverter.valid_info;

@@ -88,7 +88,7 @@ void setup() {
 
   webserverSetup();
 
-  delay(5*1000);
+  delay(500);
 
   otaSetup();
   ArduinoOTA.begin();

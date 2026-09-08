@@ -786,6 +786,8 @@ Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
 ## Version Information
 
 - **Firmware Version**: Defined in `src/config.h` as `VERSION`
+- **Web Dashboard Version**: Shown in the header of `data/index.html` and populated dynamically from the `version` field of the `/api/status` JSON response (e.g., `Hybrid Inverter Monitor v3.6`)
+- **Version Bump Rule**: Every time any change is made to the project, increment the least significant segment of the version number defined in `src/config.h`. For example: `3.5` → `3.6` → `3.7`, and so on. The web dashboard will automatically reflect the new version via `/api/status`.
 - **PlatformIO**: Uses `~/.platformio` installation
 - **Python**: Requires Python 3.7+
 

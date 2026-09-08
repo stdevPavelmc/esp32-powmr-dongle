@@ -274,12 +274,51 @@ function updateFooter() {
     document.getElementById('lastUpdate').textContent = `Last update: ${now}`;
 }
 
+let version = undefined;
+
 async function init() {
     await fetchNames();
     await fetchStatus();
-    
+
     // Set up update intervals, unit is in seconds with decimals
     setInterval(fetchStatus, pollInterval * 1000);
+}
+
+async function fetchStatus() {
+    try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+
+        // update version from status
+        if (data.version !== undefined) {
+            version = data.version;
+            updateVersion();
+        }
+
+        // update data
+        renderDashboard(data);
+        updateFooter();
+
+        // // select the read_interval
+        // if (data.inverter && data.inverter.read_interval_ms) {
+        //     const newInterval = data.inverter.read_interval_ms / 1000; // seconds
+        //     if (newInterval !== pollInterval) {
+        //         pollInterval = newInterval;
+        //         schedulePoll();
+        //     }
+        // }
+    } catch (e) {
+        console.error('Failed to fetch status:', e);
+        document.getElementById('lastUpdate').textContent = 'Connection error';
+    }
+}
+
+function updateVersion() {
+    const versionEl = document.getElementById('version');
+    if (!versionEl) return;
+    if (typeof version !== 'undefined') {
+        versionEl.textContent = 'v' + version;
+    }
 }
 
 window.addEventListener('DOMContentLoaded', init);
