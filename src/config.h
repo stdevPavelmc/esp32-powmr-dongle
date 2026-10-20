@@ -12,7 +12,7 @@
 // #define DEBUG_INVERTER 1
 
 #define MONITOR_SERIAL_SPEED 9600
-#define VERSION  3.6
+#define VERSION  3.9
 
 // Preferences save thresholds
 #define SAVE_THRESHOLD_PV 5.0       // 5 Wh
@@ -21,7 +21,7 @@
 #define SAVE_THRESHOLD_AC 20.0      // 50 Wh
 
 // Battery Gas Gauge Configuration
-const float MAXIMUM_ENERGY = 25.6*100*2;  // Wh
+const float MAXIMUM_ENERGY = 25.6*100*3;  // Wh
 const float MINIMUM_VOLTAGE = 22.0;   // V
 const float MAXIMUM_VOLTAGE = 28.8;   // V
 

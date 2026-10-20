@@ -1,6 +1,5 @@
 let namesData = {};
 let pollInterval = 5; // 5 seconds
-let timeoutId = null;
 
 async function fetchNames() {
     try {
@@ -8,29 +7,6 @@ async function fetchNames() {
         namesData = await res.json();
     } catch (e) {
         console.error('Failed to load names:', e);
-    }
-}
-
-async function fetchStatus() {
-    try {
-        const res = await fetch('/api/status');
-        const data = await res.json();
-        
-        // update data
-        renderDashboard(data);
-        updateFooter();
-
-        // // select the read_interval
-        // if (data.inverter && data.inverter.read_interval_ms) {
-        //     const newInterval = data.inverter.read_interval_ms / 1000; // seconds
-        //     if (newInterval !== pollInterval) {
-        //         pollInterval = newInterval;
-        //         schedulePoll();
-        //     }
-        // }
-    } catch (e) {
-        console.error('Failed to fetch status:', e);
-        document.getElementById('lastUpdate').textContent = 'Connection error';
     }
 }
 
@@ -232,7 +208,8 @@ function createCard(key, value, sectionKey) {
 
 function createPanel(sectionKey, sectionData, colorIndex) {
     const panel = document.createElement('div');
-    panel.className = `panel panel-color-${colorIndex % 8}`;
+    const cardCount = Object.keys(sectionData).length;
+    panel.className = `panel panel-color-${colorIndex % 8}${cardCount > 8 ? ' panel-wide' : ''}`;
 
     const meta = namesData[sectionKey] || {};
     const name = meta.name || sectionKey.toUpperCase();

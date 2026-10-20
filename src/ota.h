@@ -12,4 +12,7 @@ void otaSetup();
 // Initialize mDNS
 void mdnsSetup();
 
+// Restart OTA and mDNS after the WiFi stack has been reset
+void networkServicesRestart();
+
 #endif // OTA_H

@@ -4,6 +4,7 @@
 #include "wifi.h"
 #include "globals.h"
 #include "wifi_creds.h"
+#include "ota.h"
 #include <WiFi.h>
 #include <WiFiAP.h>
 
@@ -58,6 +59,9 @@ void doWifi() {
     sprint("IP address: ");
     sprintln(myIp);
   }
+
+  // WiFi was (re)initialized: bring OTA and mDNS back up on the new interface.
+  networkServicesRestart();
 }
 
 // Check WiFi connection and reconnect if needed
@@ -102,6 +106,7 @@ void tryReconnectToClient() {
       sprintln("WiFi Ready");
       sprint("IP address: ");
       sprintln(myIp);
+      networkServicesRestart();
     } else {
       // Failed to connect, return to AP mode
       sprintln("Failed to connect to client network, returning to AP mode");
@@ -118,6 +123,9 @@ void tryReconnectToClient() {
       
       // Update persistent state
       prefs.putULong("ap_start_time", apModeStartTime);
+
+      // Interface changed back to the AP: restore OTA/mDNS on the AP address.
+      networkServicesRestart();
     }
   }
 }

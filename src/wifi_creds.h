@@ -13,6 +13,6 @@ static const char *s_ssid = "ESP32-PowMr";
 static const char *s_password = "Zaratustra!!!";
 
 // Hostname for mDNS and network discovery
-static const char *hostname = "ESP32-PowMr";
+static const char *hostname = "powmr";
 
 #endif // WIFI_CREDS_H

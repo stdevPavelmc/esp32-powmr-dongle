@@ -8,6 +8,9 @@
 #include <ESPmDNS.h>
 #include <ArduinoOTA.h>
 
+// OTA UDP port (espota default)
+#define OTA_PORT 3232
+
 // Print macros for this module
 #ifdef WEBSERIAL
   #include <WebSerial.h>
@@ -17,6 +20,11 @@
   #define sprint(...) Serial.print(__VA_ARGS__)
   #define sprintln(...) Serial.println(__VA_ARGS__)
 #endif
+
+// Service state, used to avoid double initialization and to know whether a
+// restart is required after the WiFi stack has been reset.
+static bool ota_ready = false;
+static bool mdns_ready = false;
 
 // Initialize OTA updates
 void otaSetup() {
@@ -56,19 +64,58 @@ void otaSetup() {
         }
       });
 
-  ArduinoOTA.setPort(3232);
+  ArduinoOTA.setPort(OTA_PORT);
   ArduinoOTA.setHostname(hostname);
+
+  // mDNS is handled by mdnsSetup() so the HTTP and OTA services are
+  // advertised together, exactly once.
+  ArduinoOTA.setMdnsEnabled(false);
+
+  // Bind the OTA UDP socket. This must happen after WiFi is up and again
+  // whenever the WiFi stack has been restarted.
+  ArduinoOTA.begin();
+  ota_ready = true;
+  sprint("OTA server started on port ");
+  sprintln(OTA_PORT);
 }
 
-// Initialize mDNS
+// Initialize mDNS (idempotent, never blocks setup on failure)
 void mdnsSetup() {
-  if (!MDNS.begin(hostname)) {
-    sprintln(F("Error setting up MDNS responder!"));
-    while (10) {
-      delay(100);
-    }
+  if (mdns_ready) {
+    return;
   }
 
-  sprintln("mDNS responder started");
+  if (!MDNS.begin(hostname)) {
+    sprintln(F("Error setting up MDNS responder!"));
+    return;
+  }
+
   MDNS.addService("http", "tcp", 80);
+  MDNS.enableArduino(OTA_PORT, false);
+  mdns_ready = true;
+
+  sprint("mDNS responder started: ");
+  sprint(hostname);
+  sprintln(".local");
+}
+
+// Restart OTA and mDNS after a WiFi reconnect.
+// Resetting the WiFi stack can leave the OTA UDP socket and the mDNS responder
+// in a stale state, which silently breaks OTA until the next reboot.
+void networkServicesRestart() {
+  // Services were never started (still booting) - nothing to restore.
+  if (!ota_ready && !mdns_ready) {
+    return;
+  }
+
+  ArduinoOTA.end();
+  ota_ready = false;
+
+  if (mdns_ready) {
+    MDNS.end();
+    mdns_ready = false;
+  }
+
+  otaSetup();
+  mdnsSetup();
 }

@@ -91,7 +91,6 @@ void setup() {
   delay(500);
 
   otaSetup();
-  ArduinoOTA.begin();
 
   sprintln("OTA ready");
 
